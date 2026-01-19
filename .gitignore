@@ -1,2 +1,14 @@
 .venv/
 venv/
+
+data/
+
+# 모델 가중치
+*.pth
+*.onnx
+
+# Python
+__pycache__/
+*.pyc
+
+test_results/
