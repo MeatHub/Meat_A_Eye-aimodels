@@ -17,3 +17,4 @@ htmlcov/
 *.log
 .env
 .DS_Store
+data/

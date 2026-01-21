@@ -1,0 +1,25 @@
+# Meat A Eye - OCR 엔진 및 이미지 전처리
+# Python 3.12.10, CUDA 13.1 (RTX 4060)
+# 
+# ⚠️ 중요: PyTorch는 CUDA 버전을 별도로 설치해야 합니다!
+# 설치 명령: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# OCR 엔진 (PyTorch 설치 후)
+easyocr>=1.7.0
+
+# 이미지 처리
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# EXIF 처리
+piexif>=1.1.3
+
+# 이미지 전처리 (노이즈 제거, Contrast)
+scikit-image>=0.21.0
+
+# 유틸리티
+tqdm>=4.66.0
+
+# Tesseract Python 바인딩
+pytesseract>=0.3.10
