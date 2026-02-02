@@ -1,0 +1,24 @@
+# Meat-A-Eye AI Server Requirements (2026.01 Update for RTX 5060)
+
+# Deep Learning (Blackwell SM 12.0 Support)
+torch>=2.10.0
+torchvision>=0.21.0
+efficientnet_pytorch>=0.7.1
+
+# Web Server
+fastapi>=0.115.0
+uvicorn>=0.34.0
+python-multipart>=0.0.12
+
+# Image Processing (Latest Albumentations for warning fix)
+opencv-python>=4.11.0
+pillow>=11.0.0
+albumentations>=1.4.20
+
+# OCR
+easyocr>=1.7.2
+
+# Utilities
+numpy>=2.1.0
+pyyaml>=6.0.2
+python-dotenv>=1.0.1

@@ -1,4 +1,44 @@
+# 가상환경
 .venv/
 venv/
 *venv/
 **/venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 모델 가중치 (용량 큼, Git LFS 또는 별도 저장 권장)
+*.pth
+*.pt
+*.onnx
+
+# 학습/시각화 결과물 (재생성 가능)
+ai-server/test_results/
+
+# 데이터 (이미지 업로드 안 함)
+data/dataset_final/
+data/raw_images/
+data/master_dataset/
+data/*.zip
+
+# 환경변수/비밀키
+.env
+.env.local
+*.pem
+
+# IDE (선택)
+# .idea/
+# .vscode/
+
+cropped_meat.py
