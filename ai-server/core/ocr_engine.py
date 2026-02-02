@@ -3,8 +3,45 @@ import numpy as np
 import re
 import os
 import glob
+import tempfile
 import easyocr
-from typing import List, Tuple, Dict, Optional
+from typing import Any, List, Tuple, Dict, Optional
+
+# 싱글톤 OCR 인스턴스 (extract_text용)
+_ocr_instance: Optional["MeatTraceabilityOCR"] = None
+
+
+def extract_text(img_array: np.ndarray) -> Dict[str, Any]:
+    """
+    numpy 이미지 배열에서 이력번호 추출 (main.py /ai/analyze ocr 모드용).
+    
+    Args:
+        img_array: RGB numpy 배열 (H, W, 3)
+    
+    Returns:
+        {"success": bool, "text": str, "raw": str}
+    """
+    global _ocr_instance
+    if _ocr_instance is None:
+        _ocr_instance = MeatTraceabilityOCR()
+    
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            cv2.imwrite(f.name, cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+            path = f.name
+        try:
+            result = _ocr_instance.extract(path)
+            return {
+                "success": result != "Not Found",
+                "text": result if result != "Not Found" else "",
+                "raw": result,
+            }
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+    except Exception as e:
+        return {"success": False, "text": "", "raw": str(e), "error": str(e)}
+
 
 class MeatTraceabilityOCR:
     def __init__(self):

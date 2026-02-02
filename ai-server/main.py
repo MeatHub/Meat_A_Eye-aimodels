@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware  # 웹 필수: CORS 설정
 from core.web_processor import process_web_image
 from core.vision_engine import predict_part
 from core.ocr_engine import extract_text
+from core.predict_b2 import get_predict_engine
 
 app = FastAPI(title="Meat-A-Eye AI Web Server")
 
@@ -25,6 +26,32 @@ app.add_middleware(
 async def root():
     """서버 상태 확인"""
     return {"status": "running", "service": "Meat-A-Eye AI Server"}
+
+
+@app.post("/predict")
+async def predict_meat_part(file: UploadFile = File(...)):
+    """
+    EfficientNet-B2 + Grad-CAM 기반 고기 부위 추론
+    
+    Returns:
+        class_name, confidence, heatmap_image(base64)
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="이미지 파일만 업로드 가능합니다.")
+    contents = await file.read()
+    try:
+        engine = get_predict_engine()
+        result = engine.predict(contents)
+        return {
+            "status": "success",
+            "class_name": result["class_name"],
+            "confidence": result["confidence"],
+            "heatmap_image": result["heatmap_image"],
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=f"모델 로드 실패: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"추론 실패: {str(e)}")
 
 
 @app.post("/ai/analyze")
@@ -103,4 +130,4 @@ async def analyze_meat(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
