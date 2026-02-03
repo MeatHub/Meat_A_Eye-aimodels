@@ -1,15 +1,16 @@
 import os
 import shutil
 import random
+from pathlib import Path
 from tqdm import tqdm
 
 # ==========================================
-# 1. 경로 설정
+# 1. 경로 설정 (Mac/Windows 공통)
 # ==========================================
 # 모든 부위가 폴더별로 모여있는 곳
-MASTER_DATA_ROOT = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data\master_dataset"
+MASTER_DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "master_dataset"
 # 최종적으로 학습에 사용될 분할 폴더
-FINAL_SPLIT_ROOT = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final"
+FINAL_SPLIT_ROOT = Path(__file__).resolve().parent.parent / "data" / "dataset_final"
 
 # 목표 비율 (8:1:1)
 RATIOS = {'train': 0.8, 'val': 0.1, 'test': 0.1}

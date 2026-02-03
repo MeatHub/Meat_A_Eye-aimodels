@@ -11,13 +11,15 @@ from tqdm import tqdm
 # ==========================================
 # 1. 경로 설정 (팀장님 환경)
 # ==========================================
-RAW_INPUT_FOLDER = r"/Users/jangjuyeon/Downloads/중간 프로젝트/MeatHub/Meat_A_Eye-aimodels/data/raw_images/Beef_BottomRound"
+RAW_INPUT_FOLDER = r"/Users/jangjuyeon/Downloads/중간 프로젝트/MeatHub/Meat_A_Eye-aimodels/data/raw_images/Pork_Tenderloin"
 MASTER_DATA_ROOT = r"/Users/jangjuyeon/Downloads/중간 프로젝트/MeatHub/Meat_A_Eye-aimodels/data/master_dataset"
 FINAL_SPLIT_ROOT = r"/Users/jangjuyeon/Downloads/중간 프로젝트/MeatHub/Meat_A_Eye-aimodels/data/dataset_final"
 
-PREFIX = "Beef_Tenderloin"
+PREFIX = "Pork_Tenderloin"
 # 목표 비율 (8:1:1)
 RATIOS = {'train': 0.8, 'val': 0.1, 'test': 0.1}
+# True: 정제 후 dataset_final로 이동, False: master_dataset에만 저장 (압축 후 구글 드라이브 업로드용)
+SEND_TO_DATASET_FINAL = False
 
 # 필터링 설정
 THRESHOLD = 0.35
@@ -90,35 +92,30 @@ def run_smart_sync_pipeline():
                 new_crops.append(os.path.basename(save_path))
         except Exception as e: print(f"Error {filename}: {e}")
 
-    # --- STEP 2: 신규 파일을 기존 폴더에 '배분' ---
-    print(f"\n📂 [Step 2] 신규 데이터({len(new_crops)}개) 배분 시작...")
-    
-    # 현재 배분 상태 확인
-    split_info = get_current_split_files()
-    
-    for filename in new_crops:
-        master_path = os.path.join(target_master_dir, filename)
-        
-        # 어느 폴더에 넣을지 결정 (비율 유지 로직)
-        current_counts = {k: len(split_info[k]) for k in ['train', 'val', 'test']}
-        total = sum(current_counts.values()) + 1
-        
-        # 목표 대비 가장 부족한 폴더 찾기
-        best_split = 'train'
-        max_diff = -1
-        for s in ['train', 'val', 'test']:
-            diff = RATIOS[s] - (current_counts[s] / total)
-            if diff > max_diff:
-                max_diff = diff
-                best_split = s
-        
-        # 파일 이동 및 기록 업데이트
-        target_path = os.path.join(FINAL_SPLIT_ROOT, best_split, PREFIX)
-        os.makedirs(target_path, exist_ok=True)
-        shutil.move(master_path, os.path.join(target_path, filename))
-        split_info[best_split].add(filename)
-
-    print(f"\n✨ 작업 완료! 팀장님이 삭제한 번호는 건드리지 않고, 신규 데이터만 빈 칸에 채워 넣었습니다.")
+    # --- STEP 2: 신규 파일을 dataset_final로 배분 (SEND_TO_DATASET_FINAL=True일 때만) ---
+    if SEND_TO_DATASET_FINAL:
+        print(f"\n📂 [Step 2] 신규 데이터({len(new_crops)}개) dataset_final 배분 시작...")
+        split_info = get_current_split_files()
+        for filename in new_crops:
+            master_path = os.path.join(target_master_dir, filename)
+            current_counts = {k: len(split_info[k]) for k in ['train', 'val', 'test']}
+            total = sum(current_counts.values()) + 1
+            best_split = 'train'
+            max_diff = -1
+            for s in ['train', 'val', 'test']:
+                diff = RATIOS[s] - (current_counts[s] / total)
+                if diff > max_diff:
+                    max_diff = diff
+                    best_split = s
+            target_path = os.path.join(FINAL_SPLIT_ROOT, best_split, PREFIX)
+            os.makedirs(target_path, exist_ok=True)
+            shutil.move(master_path, os.path.join(target_path, filename))
+            split_info[best_split].add(filename)
+        print(f"\n✨ 작업 완료! 신규 데이터가 dataset_final(train/val/test)로 배분되었습니다.")
+    else:
+        print(f"\n✨ [Step 1만 완료] 정제된 데이터 {len(new_crops)}개가 master_dataset/{PREFIX}/ 에만 저장되었습니다.")
+        print(f"   → 압축 후 구글 드라이브에 올리려면 master_dataset 폴더를 zip 하세요.")
+        print(f"   → 나중에 dataset_final로 배분하려면 SEND_TO_DATASET_FINAL=True 로 바꾼 뒤 split.py 실행.")
 
 if __name__ == "__main__":
     run_smart_sync_pipeline()
