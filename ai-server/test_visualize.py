@@ -7,21 +7,28 @@ from PIL import Image
 import os
 import glob
 from pathlib import Path
+from datetime import datetime
 
-# 1. 설정 (B2 최적화)
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# 1. 설정 (Mac M2: MPS 우선, 없으면 CUDA → CPU)
+DEVICE = torch.device("mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "meat_vision_b2_pro.pth"
 # dataset_final/test 전체(클래스별 폴더 포함)를 시각화 대상으로 사용
 TEST_IMAGE_DIR = BASE_DIR.parent / "data" / "dataset_final" / "test"
-RESULT_DIR = BASE_DIR / "test_results"
+# 실행 시각별로 저장 → "방금 학습한 결과"만 구분 가능 (예: test_results/meat_vision_b2_pro_2025-02-04_14-30-22)
+RESULT_BASE = BASE_DIR / "test_results"
 
-# 학습 시 사용한 폴더 순서와 반드시 일치해야 합니다.
-CLASS_NAMES = ['Beef_BottomRound', 'Beef_Brisket', 'Beef_Chuck', 'Beef_Rib', 'Beef_Ribeye', 'Beef_Round', 'Beef_Shank', 'Beef_Shoulder', 'Beef_Sirloin', 'Beef_Tenderloin']
+# True: Pork_Loin, Pork_Tenderloin만 Grad-CAM (빠르게 확인용) / False: test 전체
+FOCUS_PORK_LOIN_TENDERLOIN = True
+
+# 학습 시 사용한 폴더 순서와 반드시 일치해야 합니다. (ImageFolder 알파벳 순 = train과 동일)
+CLASS_NAMES = [
+    'Beef_BottomRound', 'Beef_Brisket', 'Beef_Chuck', 'Beef_Rib', 'Beef_Ribeye',
+    'Beef_Round', 'Beef_Shank', 'Beef_Shoulder', 'Beef_Sirloin', 'Beef_Tenderloin',
+    'Pork_Loin', 'Pork_Tenderloin'
+]
 IMAGE_SIZE = 260  # EfficientNet-B2 권장 입력 사이즈
-
-os.makedirs(RESULT_DIR, exist_ok=True)
 
 # 2. Grad-CAM 클래스 (B2 대응)
 class GradCAM:
@@ -86,9 +93,26 @@ transform = transforms.Compose([
 ])
 
 def run_visual_test():
-    # test/ 하위의 모든 이미지(클래스별 폴더 포함)를 대상으로 함
-    image_files = glob.glob(str(TEST_IMAGE_DIR / "**" / "*.*"), recursive=True)
-    print(f"🚀 테스트 시작: {len(image_files)}개의 이미지 감지됨 (B2 엔진)")
+    # 이번 실행 전용 폴더: 모델이름_날짜_시각 (방금 학습한 결과만 보고 싶을 때 구분용)
+    model_stem = MODEL_PATH.stem  # e.g. meat_vision_b2_pro
+    run_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    RESULT_DIR = RESULT_BASE / f"{model_stem}_{run_time}"
+    os.makedirs(RESULT_DIR, exist_ok=True)
+    print(f"📁 결과 저장 폴더: {RESULT_DIR}\n")
+
+    # test/ 하위 이미지 수집 (FOCUS_PORK_LOIN_TENDERLOIN이면 돼지 등심·안심만)
+    if FOCUS_PORK_LOIN_TENDERLOIN:
+        image_files = []
+        for folder in ("Pork_Loin", "Pork_Tenderloin"):
+            path = TEST_IMAGE_DIR / folder
+            if path.exists():
+                image_files.extend(glob.glob(str(path / "*.*")))
+        image_files = [f for f in image_files if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+        print(f"🚀 Grad-CAM 시작: 돼지 등심·안심만 {len(image_files)}개 (B2)")
+    else:
+        image_files = glob.glob(str(TEST_IMAGE_DIR / "**" / "*.*"), recursive=True)
+        image_files = [f for f in image_files if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+        print(f"🚀 Grad-CAM 시작: test 전체 {len(image_files)}개 (B2)")
     
     for img_path in image_files:
         # 이미지 로드 및 전처리
@@ -116,9 +140,9 @@ def run_visual_test():
         # 3. 원본 이미지(260px)와 히트맵 합성
         result_img = cv2.addWeighted(img_resized, 0.6, heatmap, 0.4, 0)
         
-        # 결과 저장 로직
+        # 결과 저장 로직 (RESULT_DIR = 이번 실행 시각 폴더)
         filename = os.path.basename(img_path)
-        save_path = os.path.join(RESULT_DIR, f"res_b2_{filename}")
+        save_path = os.path.join(str(RESULT_DIR), f"res_b2_{filename}")
         
         # 정보 텍스트 삽입
         label_text = CLASS_NAMES[class_idx]
@@ -137,6 +161,8 @@ def run_visual_test():
         del input_tensor, output, heatmap, result_img
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        elif str(DEVICE) == "mps":
+            torch.mps.empty_cache()
 
 if __name__ == "__main__":
     run_visual_test()

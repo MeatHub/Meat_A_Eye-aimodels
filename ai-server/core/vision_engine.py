@@ -45,9 +45,14 @@ class MeatVisionModel:
             model_path: 학습된 가중치 파일 경로 (.pth)
             device: 추론 디바이스 ("auto", "cuda", "cpu")
         """
-        # 디바이스 설정
+        # 디바이스 설정 (Mac M2: MPS 우선, 없으면 CUDA → CPU)
         if device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            elif torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            else:
+                self.device = torch.device("cpu")
         else:
             self.device = torch.device(device)
 

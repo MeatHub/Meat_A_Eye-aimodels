@@ -18,24 +18,47 @@ if torch.cuda.is_available():
 print(f"🚀 현재 사용 중인 장비: {DEVICE}")
 
 # ===== 설정 (맥북 에어 최적화 + 파인튜닝) =====
+# [학습 시나리오]
+# - MODE = "all"         : 소+돼지 전체 학습 (기본값)
+# - MODE = "pork_focus"  : 돼지 등심/안심에 가중치 실어서 집중 학습, 별도 pth로 저장
+# - fine_tune=False      : ImageNet → 한 번에 학습 (권장)
+# - fine_tune=True       : 기존 pth 이어서 학습 (클래스 수 동일할 때만)
 CONFIG = {
+    "mode": "all",  # "all" 또는 "pork_focus"
     "dataset_root": Path(__file__).resolve().parent.parent / "data" / "dataset_final",
     "model_save_path": Path(__file__).resolve().parent / "models" / "meat_vision_b2_pro.pth",
     "pretrained_model_path": Path(__file__).resolve().parent / "models" / "meat_vision_b2_pro.pth",  # 파인튜닝용 기존 모델 경로
-    "num_epochs": 5,              # 파인튜닝용으로 줄임 (3~5 epoch 권장)
+    "num_epochs": 20,             # 전체 학습 권장 15~25 / 파인튜닝 시 3~5
     "batch_size": 16,             # 맥북 에어 권장 (메모리 부족 시 8로 줄이세요)
-    "learning_rate": 5e-6,         # 파인튜닝용 낮은 학습률 (Backbone)
-    "head_learning_rate": 5e-4,   # 파인튜닝용 낮은 학습률 (Classifier)
+    "learning_rate": 5e-6,        # Backbone (ImageNet 파인튜닝)
+    "head_learning_rate": 5e-4,   # Classifier
     "train_ratio": 0.8,
     "image_size": 260,
     "num_workers": 0,             # [중요] 맥북 에어 8GB에서는 0이 가장 안전합니다.
     "mixup_alpha": 0.2,
-    "fine_tune": True,            # True: 기존 모델 로드 후 파인튜닝, False: 처음부터 학습
+    "fine_tune": False,           # 소+돼지 통합 첫 학습: False / 기존 모델 이어받기: True (클래스 수 동일 시)
+    # 기본 가중치 (소 등심·안심)
     "class_weight_ribeye_tenderloin": 1.3,  # 등심·안심 Loss 가중치 (1.0 = 미적용, 1.2~1.5 권장)
+    # 모드별로 덮어쓸 수 있는 클래스별 가중치 딕셔너리
+    # 예시) "pork_focus"에서 Pork_Loin / Pork_Tenderloin만 1.5로 주기 등
+    "class_weights": {},  # {"Pork_Loin": 1.5, "Pork_Tenderloin": 1.5} 이런 식으로 사용
 }
 
-# 디렉토리 자동 생성
-os.makedirs(CONFIG["model_save_path"].parent, exist_ok=True)
+# ===== 모드별 설정 덮어쓰기 =====
+MODE = CONFIG.get("mode", "all")
+
+if MODE == "pork_focus":
+    # 돼지 등심/안심 집중 학습 모드
+    # - 저장 파일명 따로 관리
+    CONFIG["model_save_path"] = Path(__file__).resolve().parent / "models" / "meat_vision_b2_pork_focus.pth"
+    # - 돼지 등심/안심에 가중치 몰아주기
+    CONFIG["class_weights"] = {
+        "Pork_Loin": 1.5,
+        "Pork_Tenderloin": 1.5,
+    }
+
+# 디렉토리 자동 생성 (mode 반영된 경로 기준)
+os.makedirs(Path(CONFIG["model_save_path"]).parent, exist_ok=True)
 
 # ===== [핵심 1] 증강 전략 =====
 train_transform = A.Compose([
@@ -133,19 +156,35 @@ def main():
     num_classes = len(train_dataset.classes)
     print(f"✅ 클래스 개수: {num_classes}개")
 
-    # 등심·안심 Loss 가중치 (클래스 인덱스는 ImageFolder 알파벳 순서)
-    weight_val = CONFIG.get("class_weight_ribeye_tenderloin", 1.0)
-    if weight_val != 1.0:
+    # ===== Loss 가중치 설정 =====
+    # 1) class_weights 딕셔너리가 있으면 우선 적용
+    class_weights_cfg = CONFIG.get("class_weights", {}) or {}
+    if class_weights_cfg:
         class_weights = torch.ones(num_classes, dtype=torch.float32)
-        for name in ("Beef_Ribeye", "Beef_Tenderloin"):
+        for name, w in class_weights_cfg.items():
             if name in train_dataset.class_to_idx:
-                i = train_dataset.class_to_idx[name]
-                class_weights[i] = weight_val
+                idx = train_dataset.class_to_idx[name]
+                class_weights[idx] = float(w)
         class_weights = class_weights.to(DEVICE)
         criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
-        print(f"   📌 등심·안심 Loss 가중치: {weight_val}")
+        print(f"   📌 클래스별 Loss 가중치 적용:")
+        for name, w in class_weights_cfg.items():
+            if name in train_dataset.class_to_idx:
+                print(f"      - {name}: {w}")
     else:
-        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        # 2) 기존 등심·안심 통합 가중치 (과거 설정과 호환용)
+        weight_val = CONFIG.get("class_weight_ribeye_tenderloin", 1.0)
+        if weight_val != 1.0:
+            class_weights = torch.ones(num_classes, dtype=torch.float32)
+            for name in ("Beef_Ribeye", "Beef_Tenderloin"):
+                if name in train_dataset.class_to_idx:
+                    i = train_dataset.class_to_idx[name]
+                    class_weights[i] = weight_val
+            class_weights = class_weights.to(DEVICE)
+            criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
+            print(f"   📌 등심·안심 Loss 가중치: {weight_val}")
+        else:
+            criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     # DataLoader 설정
     train_loader = DataLoader(AlbumentationsDataset(train_dataset, train_transform), 
@@ -190,7 +229,7 @@ def main():
     best_val_acc = 0.0
     
     mode_str = "파인튜닝" if (CONFIG["fine_tune"] and os.path.exists(CONFIG["pretrained_model_path"])) else "처음부터 학습"
-    print(f"\n🔥 {mode_str} 시작! (MacBook Air가 조금 뜨거워질 수 있습니다)")
+    print(f"\n🔥 MODE = {MODE} / {mode_str} 시작! (MacBook Air가 조금 뜨거워질 수 있습니다)")
     print(f"   - Backbone 학습률: {CONFIG['learning_rate']}")
     print(f"   - Classifier 학습률: {CONFIG['head_learning_rate']}")
     print(f"   - Epoch: {CONFIG['num_epochs']}\n")
