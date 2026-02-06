@@ -23,3 +23,14 @@ tqdm>=4.66.0
 
 # Tesseract Python 바인딩
 pytesseract>=0.3.10
+
+# Windows Runtime (WinRT) - Windows OCR 사용
+# Python 3.12 이상에서도 작동합니다
+winrt-runtime>=3.2.1
+winrt-Windows.Foundation>=3.2.1
+winrt-Windows.Foundation.Collections>=3.2.1
+winrt-Windows.Media.Ocr>=3.2.1
+winrt-Windows.Graphics.Imaging>=3.2.1
+winrt-Windows.Storage.Streams>=3.2.1
+winrt-Windows.Storage>=3.2.1
+winrt-Windows.Globalization>=3.2.1
