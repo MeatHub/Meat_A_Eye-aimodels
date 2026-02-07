@@ -44,3 +44,4 @@ data/*.zip
 cropped_meat.py
 data.zip
 정제데이터_학습_가이드.md
+models

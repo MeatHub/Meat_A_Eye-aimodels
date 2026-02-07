@@ -26,11 +26,11 @@ logging.getLogger("transformers.pipelines.base").setLevel(logging.WARNING)
 # [중요] 부위 바꿀 때 아래 두 개를 반드시 같은 부위로 맞출 것!
 #       입력 폴더 = raw_images/{부위}, PREFIX = master_dataset 저장 폴더명
 BASE = Path(__file__).resolve().parent.parent / "data"
-RAW_INPUT_FOLDER = BASE / "raw_images" / "Pork_Loin"   # 정제할 원본 이미지 폴더 (부위별로 변경)
+RAW_INPUT_FOLDER = BASE / "raw_images" / "Pork_PicnicShoulder"   # 정제할 원본 이미지 폴더 (부위별로 변경)
 MASTER_DATA_ROOT = BASE / "master_dataset"
 FINAL_SPLIT_ROOT = BASE / "dataset_final"
 
-PREFIX = "Pork_Loin"   # master_dataset 안에 만들어질 폴더명 (RAW_INPUT_FOLDER 부위와 동일하게)
+PREFIX = "Pork_PicnicShoulder"   # master_dataset 안에 만들어질 폴더명 (RAW_INPUT_FOLDER 부위와 동일하게)
 # 목표 비율 (8:1:1)
 RATIOS = {'train': 0.8, 'val': 0.1, 'test': 0.1}
 # True: 정제 후 dataset_final로 이동, False: master_dataset에만 저장 (압축 후 구글 드라이브 업로드용)
