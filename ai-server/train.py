@@ -41,7 +41,10 @@ CONFIG = {
     "class_weight_ribeye_tenderloin": 1.3,  # 등심·안심 Loss 가중치 (1.0 = 미적용, 1.2~1.5 권장)
     # 모드별로 덮어쓸 수 있는 클래스별 가중치 딕셔너리
     # 예시) "pork_focus"에서 Pork_Loin / Pork_Tenderloin만 1.5로 주기 등
-    "class_weights": {},  # {"Pork_Loin": 1.5, "Pork_Tenderloin": 1.5} 이런 식으로 사용
+    "class_weights": {
+        "Pork_Loin": 1.7,
+        "Pork_Tenderloin": 1.7,
+    },
 }
 
 # ===== 모드별 설정 덮어쓰기 =====
@@ -63,10 +66,19 @@ os.makedirs(Path(CONFIG["model_save_path"]).parent, exist_ok=True)
 # ===== [핵심 1] 증강 전략 =====
 train_transform = A.Compose([
     A.Resize(CONFIG["image_size"], CONFIG["image_size"]),
-    A.Affine(translate_percent=0.1, scale=(0.8, 1.2), rotate=(-30, 30), p=0.5),
+    A.Affine(translate_percent=0.15, scale=(0.7, 1.3), rotate=(-40, 40), p=0.7),
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.3),
-    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
+    A.ColorJitter(
+        brightness=0.4,
+        contrast=0.4,
+        saturation=0.4,
+        hue=0.1,
+        p=0.8,
+    ),
+    A.GaussianBlur(blur_limit=(3, 7), p=0.5),
+    A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=0.5),
+    A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
     A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5),
     A.CLAHE(clip_limit=2.0, p=0.3),
     A.CoarseDropout(

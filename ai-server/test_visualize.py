@@ -16,17 +16,15 @@ BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "meat_vision_b2_pro.pth"
 # dataset_final/test 전체(클래스별 폴더 포함)를 시각화 대상으로 사용
 TEST_IMAGE_DIR = BASE_DIR.parent / "data" / "dataset_final" / "test"
-# 실행 시각별로 저장 → "방금 학습한 결과"만 구분 가능 (예: test_results/meat_vision_b2_pro_2025-02-04_14-30-22)
-RESULT_BASE = BASE_DIR / "test_results"
+# True: Pork_Loin, Pork_Tenderloin만 Grad-CAM → gradcam_results/
+# False: test 전체 클래스 → gradcam_results_full/
+FOCUS_PORK_LOIN_TENDERLOIN = False
 
-# True: Pork_Loin, Pork_Tenderloin만 Grad-CAM (빠르게 확인용) / False: test 전체
-FOCUS_PORK_LOIN_TENDERLOIN = True
-
-# 학습 시 사용한 폴더 순서와 반드시 일치해야 합니다. (ImageFolder 알파벳 순 = train과 동일)
+# 학습 시 사용한 폴더 순서와 반드시 일치해야 합니다. (ImageFolder 알파벳 순 = train 17클래스)
 CLASS_NAMES = [
     'Beef_BottomRound', 'Beef_Brisket', 'Beef_Chuck', 'Beef_Rib', 'Beef_Ribeye',
     'Beef_Round', 'Beef_Shank', 'Beef_Shoulder', 'Beef_Sirloin', 'Beef_Tenderloin',
-    'Pork_Loin', 'Pork_Tenderloin'
+    'Pork_Belly', 'Pork_Ham', 'Pork_Loin', 'Pork_Neck', 'Pork_PicnicShoulder', 'Pork_Ribs', 'Pork_Tenderloin'
 ]
 IMAGE_SIZE = 260  # EfficientNet-B2 권장 입력 사이즈
 
@@ -93,12 +91,13 @@ transform = transforms.Compose([
 ])
 
 def run_visual_test():
-    # 이번 실행 전용 폴더: 모델이름_날짜_시각 (방금 학습한 결과만 보고 싶을 때 구분용)
-    model_stem = MODEL_PATH.stem  # e.g. meat_vision_b2_pro
+    # 돼지 등심·안심만 → gradcam_results / 전체 클래스 → gradcam_results_full
+    result_base = BASE_DIR / ("gradcam_results" if FOCUS_PORK_LOIN_TENDERLOIN else "gradcam_results_full")
+    model_stem = MODEL_PATH.stem
     run_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    RESULT_DIR = RESULT_BASE / f"{model_stem}_{run_time}"
+    RESULT_DIR = result_base / f"{model_stem}_{run_time}"
     os.makedirs(RESULT_DIR, exist_ok=True)
-    print(f"📁 결과 저장 폴더: {RESULT_DIR}\n")
+    print(f"📁 GradCAM 결과 저장: {RESULT_DIR}\n")
 
     # test/ 하위 이미지 수집 (FOCUS_PORK_LOIN_TENDERLOIN이면 돼지 등심·안심만)
     if FOCUS_PORK_LOIN_TENDERLOIN:
