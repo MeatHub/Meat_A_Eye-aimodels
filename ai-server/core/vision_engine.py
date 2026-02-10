@@ -1,7 +1,7 @@
 """
-Meat-A-Eye 웹 브라우저 업로드 이미지 기반 부위 추론 엔진
-EfficientNet-B0 기반, 필요시 B2~B3 확장 가능
-목표 추론 속도: 200ms 이내
+Meat-A-Eye 웹 부위 추론 엔진
+- 우선: B2 17클래스 (meat_vision_b2_pro.pth) — 학습 시와 동일 전처리·클래스
+- fallback: B0 10클래스 (meat_vision_v2.pth)
 """
 import numpy as np
 import torch
@@ -10,11 +10,20 @@ from torchvision import models
 from typing import Dict, Optional
 from pathlib import Path
 
-from .web_processor import preprocess_for_model
+from .web_processor import preprocess_for_model, preprocess_for_model_b2
 
+# ---------- B2 17클래스 (학습 dataset_final 폴더 순서와 동일) ----------
+CLASS_NAMES_B2 = [
+    "Beef_BottomRound", "Beef_Brisket", "Beef_Chuck", "Beef_Rib", "Beef_Ribeye",
+    "Beef_Round", "Beef_Shank", "Beef_Shoulder", "Beef_Sirloin", "Beef_Tenderloin",
+    "Pork_Belly", "Pork_Ham", "Pork_Loin", "Pork_Neck", "Pork_PicnicShoulder",
+    "Pork_Ribs", "Pork_Tenderloin",
+]
+MODEL_PATH_B2 = Path(__file__).parent.parent / "models" / "meat_vision_b2_pro.pth"
+IMAGE_SIZE_B2 = 260
 
-# 소/돼지 주요 부위 7~10종 클래스 정의
-MEAT_CLASSES = {
+# ---------- B0 10클래스 (fallback) ----------
+MEAT_CLASSES_B0 = {
     0: {"name": "삼겹살", "name_en": "pork_belly", "animal": "pork"},
     1: {"name": "목살", "name_en": "pork_shoulder", "animal": "pork"},
     2: {"name": "등심", "name_en": "sirloin", "animal": "beef"},
@@ -26,137 +35,125 @@ MEAT_CLASSES = {
     8: {"name": "차돌박이", "name_en": "brisket", "animal": "beef"},
     9: {"name": "항정살", "name_en": "pork_jowl", "animal": "pork"},
 }
-
-# 신뢰도 임계값 (75% 미만 시 경고)
+MODEL_PATH_B0 = Path(__file__).parent.parent / "models" / "meat_vision_v2.pth"
 CONFIDENCE_THRESHOLD = 0.75
 
-# 모델 경로
-MODEL_PATH = Path(__file__).parent.parent / "models" / "meat_vision_v2.pth"
+
+def _create_model_b2(num_classes: int):
+    model = models.efficientnet_b2(weights=None)
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.4, inplace=True),
+        nn.Linear(model.classifier[1].in_features, num_classes),
+    )
+    return model
 
 
-class MeatVisionModel:
-    """EfficientNet-B0 기반 고기 부위 분류 모델"""
+class MeatVisionModelB2:
+    """EfficientNet-B2 17클래스. 학습 시와 동일 전처리(260x260)."""
 
-    def __init__(self, model_path: Optional[str] = None, device: str = "auto"):
-        """
-        모델 초기화
-
-        Args:
-            model_path: 학습된 가중치 파일 경로 (.pth)
-            device: 추론 디바이스 ("auto", "cuda", "cpu")
-        """
-        # 디바이스 설정 (Mac M2: MPS 우선, 없으면 CUDA → CPU)
+    def __init__(self, model_path: Optional[Path] = None, device: str = "auto"):
         if device == "auto":
-            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-                self.device = torch.device("mps")
-            elif torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            else:
-                self.device = torch.device("cpu")
+            self.device = torch.device(
+                "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
+                else "cuda" if torch.cuda.is_available() else "cpu"
+            )
         else:
             self.device = torch.device(device)
-
-        # 모델 구조 생성 (EfficientNet-B0)
-        self.model = models.efficientnet_b0(weights=None)
-
-        # 분류 헤드 수정 (클래스 수에 맞게)
-        num_classes = len(MEAT_CLASSES)
-        self.model.classifier[1] = nn.Linear(
-            self.model.classifier[1].in_features,
-            num_classes
-        )
-
-        # 가중치 로드
-        self.model_path = model_path or MODEL_PATH
-        self._load_weights()
-
-        # 평가 모드로 전환
-        self.model.to(self.device)
-        self.model.eval()
-
-    def _load_weights(self):
-        """학습된 가중치 로드"""
-        if Path(self.model_path).exists():
-            state_dict = torch.load(self.model_path, map_location=self.device)
-            self.model.load_state_dict(state_dict)
-            print(f"[Vision Engine] 모델 가중치 로드 완료: {self.model_path}")
+        path = model_path or MODEL_PATH_B2
+        self.model = _create_model_b2(len(CLASS_NAMES_B2)).to(self.device)
+        if path.exists():
+            state = torch.load(str(path), map_location=self.device)
+            self.model.load_state_dict(state)
+            self.model.eval()
+            print(f"[Vision Engine] B2 17클래스 모델 로드: {path}")
         else:
-            print(f"[Vision Engine] 경고: 가중치 파일 없음. 사전학습 모델 사용")
-            # ImageNet 사전학습 가중치로 초기화
-            pretrained = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-            # classifier를 제외한 가중치만 복사
-            state_dict = pretrained.state_dict()
-            # classifier 레이어 제외
-            state_dict = {k: v for k, v in state_dict.items() if 'classifier' not in k}
-            self.model.load_state_dict(state_dict, strict=False)
+            raise FileNotFoundError(f"B2 가중치 없음: {path}")
 
     @torch.no_grad()
     def predict(self, img_array: np.ndarray) -> Dict:
-        """
-        이미지에서 고기 부위 예측
-
-        Args:
-            img_array: 전처리된 이미지 numpy 배열
-
-        Returns:
-            예측 결과 딕셔너리
-        """
-        # 모델 입력용 전처리
-        processed = preprocess_for_model(img_array)
-
-        # numpy -> torch tensor 변환 (B, C, H, W)
-        tensor = torch.from_numpy(processed).permute(2, 0, 1).unsqueeze(0).float()
-        tensor = tensor.to(self.device)
-
-        # 추론
+        processed = preprocess_for_model_b2(img_array)
+        tensor = torch.from_numpy(processed).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
         outputs = self.model(tensor)
-        probabilities = torch.softmax(outputs, dim=1)
-
-        # 최고 확률 클래스
-        score, predicted_idx = torch.max(probabilities, dim=1)
-        score = score.item()
-        predicted_idx = predicted_idx.item()
-
-        # 결과 구성
-        meat_info = MEAT_CLASSES.get(predicted_idx, {"name": "알 수 없음", "name_en": "unknown", "animal": "unknown"})
-
+        probs = torch.softmax(outputs, dim=1)
+        score, idx = torch.max(probs, dim=1)
+        score, idx = score.item(), idx.item()
+        class_name = CLASS_NAMES_B2[idx]
         return {
-            "label": meat_info["name"],
-            "label_en": meat_info["name_en"],
-            "animal": meat_info["animal"],
-            "class_idx": predicted_idx,
+            "label": class_name,
+            "label_en": class_name,
+            "animal": "beef" if class_name.startswith("Beef_") else "pork",
+            "class_idx": idx,
             "score": score,
-            "is_valid": score >= CONFIDENCE_THRESHOLD
+            "is_valid": score >= CONFIDENCE_THRESHOLD,
         }
 
 
-# 싱글톤 모델 인스턴스 (서버 시작 시 1회 로드)
-_model_instance: Optional[MeatVisionModel] = None
+class MeatVisionModelB0:
+    """EfficientNet-B0 10클래스 (fallback)."""
+
+    def __init__(self, model_path: Optional[Path] = None, device: str = "auto"):
+        if device == "auto":
+            self.device = torch.device(
+                "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
+                else "cuda" if torch.cuda.is_available() else "cpu"
+            )
+        else:
+            self.device = torch.device(device)
+        self.model = models.efficientnet_b0(weights=None)
+        self.model.classifier[1] = nn.Linear(
+            self.model.classifier[1].in_features,
+            len(MEAT_CLASSES_B0),
+        )
+        path = model_path or MODEL_PATH_B0
+        path_resolved = Path(path).resolve()
+        if path.exists():
+            state = torch.load(str(path), map_location=self.device)
+            self.model.load_state_dict(state)
+            print(f"[Vision Engine] B0 10클래스 모델 로드 (fallback): {path_resolved}")
+        else:
+            pretrained = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+            state = {k: v for k, v in pretrained.state_dict().items() if "classifier" not in k}
+            self.model.load_state_dict(state, strict=False)
+            print(f"[Vision Engine] B0 가중치 없음 (찾는 경로: {path_resolved}), classifier 랜덤 초기화")
+        self.model.to(self.device)
+        self.model.eval()
+
+    @torch.no_grad()
+    def predict(self, img_array: np.ndarray) -> Dict:
+        processed = preprocess_for_model(img_array)
+        tensor = torch.from_numpy(processed).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
+        outputs = self.model(tensor)
+        probs = torch.softmax(outputs, dim=1)
+        score, idx = torch.max(probs, dim=1)
+        score, idx = score.item(), idx.item()
+        info = MEAT_CLASSES_B0.get(idx, {"name": "알 수 없음", "name_en": "unknown", "animal": "unknown"})
+        return {
+            "label": info["name"],
+            "label_en": info["name_en"],
+            "animal": info["animal"],
+            "class_idx": idx,
+            "score": score,
+            "is_valid": score >= CONFIDENCE_THRESHOLD,
+        }
 
 
-def get_model() -> MeatVisionModel:
-    """모델 싱글톤 인스턴스 반환"""
+_model_instance: Optional[object] = None
+
+
+def get_model():
+    """B2 가중치 있으면 B2 17클래스, 없으면 B0 10클래스."""
     global _model_instance
-    if _model_instance is None:
-        _model_instance = MeatVisionModel()
+    if _model_instance is not None:
+        return _model_instance
+    path_b2 = MODEL_PATH_B2.resolve()
+    if MODEL_PATH_B2.exists():
+        _model_instance = MeatVisionModelB2()
+    else:
+        print(f"[Vision Engine] B2 가중치 없음 (찾는 경로: {path_b2}) → B0 사용")
+        _model_instance = MeatVisionModelB0()
     return _model_instance
 
 
 def predict_part(img_array: np.ndarray) -> Dict:
-    """
-    고기 부위 판별 (API 엔드포인트용)
-
-    Args:
-        img_array: process_web_image로 전처리된 이미지
-
-    Returns:
-        {
-            "label": "삼겹살",
-            "label_en": "pork_belly",
-            "animal": "pork",
-            "score": 0.92,
-            "is_valid": True
-        }
-    """
-    model = get_model()
-    return model.predict(img_array)
+    """고기 부위 판별 (API용)."""
+    return get_model().predict(img_array)

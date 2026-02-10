@@ -1,10 +1,10 @@
 # main.py (Web-Optimized Version)
 # Meat-A-Eye AI Web Server
-# FastAPI 메인 서버 (Web API 엔드포인트)
-# 연동: 백엔드 Vision → POST /predict, OCR → POST /ai/analyze
+# 연동: 백엔드 Vision → POST /predict (file), OCR → POST /ai/analyze
+# 부위명: 백엔드 PART_TO_CODES 키와 맞춰 404 방지
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # 웹 필수: CORS 설정
+from fastapi.middleware.cors import CORSMiddleware
 
 from core.web_processor import process_web_image
 from core.vision_engine import predict_part
@@ -12,51 +12,83 @@ from core.ocr_engine import extract_text
 
 app = FastAPI(title="Meat-A-Eye AI Web Server")
 
-# 웹 프론트엔드(Next.js)와의 통신을 위한 CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 개발 단계에서는 전체 허용, 운영 시 도메인 제한
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# B2 17클래스 → 백엔드 PART_TO_CODES 키 (404 방지)
+B2_TO_BACKEND = {
+    "Pork_Ribs": "Pork_Rib",
+    "Pork_PicnicShoulder": "Pork_Shoulder",
+    "Pork_Ham": "Pork_Shoulder",
+    "Pork_Neck": "Pork_Loin",
+    "Pork_Tenderloin": "Pork_Loin",
+}
+# B0 10클래스 PascalCase → 백엔드 키
+B0_TO_BACKEND = {
+    "FrontLeg": "Pork_Shoulder",
+    "RearLeg": "Pork_Shoulder",
+    "PorkBelly": "Pork_Belly",
+    "PorkShoulder": "Pork_Loin",
+    "Sirloin": "Beef_Sirloin",
+    "Tenderloin": "Beef_Tenderloin",
+    "Ribs": "Beef_Rib",
+    "Striploin": "Beef_Ribeye",
+    "Brisket": "Beef_Brisket",
+    "PorkJowl": "Pork_Loin",
+    "Unknown": "Pork_Belly",
+}
 
-def _label_en_to_class_name(label_en: str) -> str:
-    """label_en(snake_case) → 백엔드 partName용 class_name (PascalCase). 예: pork_belly → Pork_Belly"""
+
+def _to_backend_class_name(result: dict) -> str:
+    """AI 추론 결과 → 백엔드 PART_TO_CODES에 있는 부위명."""
+    label_en = result.get("label_en", "")
     if not label_en:
-        return "Unknown"
-    return "".join(w.capitalize() for w in label_en.split("_"))
+        return "Pork_Belly"
+    # B2: 이미 Beef_* / Pork_* 형태
+    if label_en.startswith("Beef_") or label_en.startswith("Pork_"):
+        return B2_TO_BACKEND.get(label_en, label_en)
+    # B0: snake_case → PascalCase → 매핑
+    pascal = "".join(w.capitalize() for w in label_en.split("_"))
+    return B0_TO_BACKEND.get(pascal, pascal)
 
 
 @app.get("/")
 async def root():
-    """서버 상태 확인"""
     return {"status": "running", "service": "Meat-A-Eye AI Server"}
 
 
-# ---------- 백엔드 연동: Vision 모드 (백엔드가 POST /predict 호출) ----------
 @app.post("/predict")
 async def predict_vision(file: UploadFile = File(..., alias="file")):
     """
-    고기 부위 인식 (Vision). 백엔드 연동용.
-    요청: multipart/form-data, 키 `file`에 이미지 (jpeg/png/webp, 최대 5MB).
-    응답: status, class_name(부위 코드), confidence.
+    Vision 연동. multipart/form-data, 필드 `file` (이미지).
+    응답: status, class_name(PART_TO_CODES 호환), confidence, heatmap_image(null 가능).
+    실패 시 status != "success", message → 백엔드 422.
     """
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="이미지 파일만 업로드 가능합니다.")
-    contents = await file.read()
-    if len(contents) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="파일 크기 초과 (최대 5MB).")
-    processed_img = process_web_image(contents)
-    result = predict_part(processed_img)
-    class_name = _label_en_to_class_name(result.get("label_en", ""))
-    confidence = float(result.get("score", 0.0))
-    return {
-        "status": "success",
-        "class_name": class_name,
-        "confidence": confidence,
-    }
+    try:
+        if not file.content_type or not file.content_type.startswith("image/"):
+            return {"status": "error", "message": "이미지 파일만 업로드 가능합니다."}
+        contents = await file.read()
+        if len(contents) > 5 * 1024 * 1024:
+            return {"status": "error", "message": "파일 크기 초과 (최대 5MB)."}
+        processed_img = process_web_image(contents)
+        result = predict_part(processed_img)
+        class_name = _to_backend_class_name(result)
+        confidence = float(result.get("score", 0.0))
+        return {
+            "status": "success",
+            "class_name": class_name,
+            "confidence": confidence,
+            "heatmap_image": None,
+        }
+    except FileNotFoundError as e:
+        return {"status": "error", "message": "모델 가중치를 찾을 수 없습니다. (B2: meat_vision_b2_pro.pth, B0: meat_vision_v2.pth)"}
+    except Exception as e:
+        return {"status": "error", "message": f"인식 중 오류가 발생했습니다. 다시 촬영해 주세요. ({str(e)})"}
 
 
 @app.post("/ai/analyze")

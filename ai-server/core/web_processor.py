@@ -10,6 +10,8 @@ from typing import Union
 
 # 모델 입력 크기 (EfficientNet-B0 기준)
 MODEL_INPUT_SIZE = (224, 224)
+# B2 17클래스: 학습 시와 동일 (evaluate_test / train)
+MODEL_INPUT_SIZE_B2 = (260, 260)
 # 서버 부하 방지를 위한 최대 이미지 크기
 MAX_IMAGE_SIZE = 1920
 
@@ -79,6 +81,25 @@ def preprocess_for_model(img_array: np.ndarray) -> np.ndarray:
     img_array = (img_array - mean) / std
 
     return img_array
+
+
+def preprocess_for_model_b2(img_array: np.ndarray) -> np.ndarray:
+    """
+    B2 17클래스 모델용 전처리 (260x260, 학습/평가와 동일).
+    Returns: (260, 260, 3) 정규화된 numpy 배열
+    """
+    image = Image.fromarray(img_array)
+    w, h = image.size
+    min_dim = min(w, h)
+    left = (w - min_dim) // 2
+    top = (h - min_dim) // 2
+    image = image.crop((left, top, left + min_dim, top + min_dim))
+    image = image.resize(MODEL_INPUT_SIZE_B2, Image.Resampling.LANCZOS)
+    arr = np.array(image).astype(np.float32) / 255.0
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    arr = (arr - mean) / std
+    return arr
 
 
 def validate_image(image_bytes: bytes) -> bool:
