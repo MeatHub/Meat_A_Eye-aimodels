@@ -7,9 +7,9 @@ from tqdm import tqdm
 # 1. 경로 및 설정
 # ==========================================
 # 원본 데이터 루트 (하위에 train, val, test 폴더가 있고 그 안에 부위 폴더들이 있는 구조)
-SOURCE_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final2"
+SOURCE_ROOT = "/Users/jangjuyeon/MeatHub/Meat_A_Eye-aimodels/data/dataset_final2"
 # 최종 결과 경로 (train / val / test 로 나눠서 저장)
-FINAL_OUTPUT_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final_v3"
+FINAL_OUTPUT_ROOT = "/Users/jangjuyeon/MeatHub/Meat_A_Eye-aimodels/data/dataset_final_v3"
 
 RATIOS = {'train': 0.8, 'val': 0.1, 'test': 0.1}
 
