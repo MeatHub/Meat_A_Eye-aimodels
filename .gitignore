@@ -9,6 +9,9 @@ __pycache__/
 *.pyc
 
 test_results/
+test_results_hf/
+test_results1/
+test_results2/
 
 .gitignore
 
