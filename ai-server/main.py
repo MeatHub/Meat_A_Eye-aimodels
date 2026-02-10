@@ -1,6 +1,7 @@
 # main.py (Web-Optimized Version)
 # Meat-A-Eye AI Web Server
 # FastAPI 메인 서버 (Web API 엔드포인트)
+# 연동: 백엔드 Vision → POST /predict, OCR → POST /ai/analyze
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware  # 웹 필수: CORS 설정
@@ -21,10 +22,41 @@ app.add_middleware(
 )
 
 
+def _label_en_to_class_name(label_en: str) -> str:
+    """label_en(snake_case) → 백엔드 partName용 class_name (PascalCase). 예: pork_belly → Pork_Belly"""
+    if not label_en:
+        return "Unknown"
+    return "".join(w.capitalize() for w in label_en.split("_"))
+
+
 @app.get("/")
 async def root():
     """서버 상태 확인"""
     return {"status": "running", "service": "Meat-A-Eye AI Server"}
+
+
+# ---------- 백엔드 연동: Vision 모드 (백엔드가 POST /predict 호출) ----------
+@app.post("/predict")
+async def predict_vision(file: UploadFile = File(..., alias="file")):
+    """
+    고기 부위 인식 (Vision). 백엔드 연동용.
+    요청: multipart/form-data, 키 `file`에 이미지 (jpeg/png/webp, 최대 5MB).
+    응답: status, class_name(부위 코드), confidence.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="이미지 파일만 업로드 가능합니다.")
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="파일 크기 초과 (최대 5MB).")
+    processed_img = process_web_image(contents)
+    result = predict_part(processed_img)
+    class_name = _label_en_to_class_name(result.get("label_en", ""))
+    confidence = float(result.get("score", 0.0))
+    return {
+        "status": "success",
+        "class_name": class_name,
+        "confidence": confidence,
+    }
 
 
 @app.post("/ai/analyze")
@@ -94,6 +126,7 @@ async def analyze_meat(
             "status": "success",
             "data": {
                 "trace_number": ocr_result['text'],
+                "historyNo": ocr_result['text'],
                 "raw_output": ocr_result['raw']
             }
         }
@@ -103,4 +136,5 @@ async def analyze_meat(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 백엔드가 8000 사용 → AI 서버는 8001 (백엔드 .env AI_SERVER_URL=http://localhost:8001)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
