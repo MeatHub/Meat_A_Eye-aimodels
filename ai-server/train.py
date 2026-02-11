@@ -14,19 +14,21 @@ import random
 from collections import Counter
 from datasets import load_dataset
 from dotenv import load_dotenv
+import matplotlib.pyplot as plt
+import pandas as pd
 
 load_dotenv()
 
 # ===== 설정 =====
-DATA_ROOT = Path(__file__).parent.parent / "data" / "dataset_final"
+DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_v4"
 CONFIG = {
     # ── 데이터 경로 (train/val/test 폴더가 이미 분리되어 있음) ──
     "train_dir": DATA_ROOT / "train",
     "val_dir":   DATA_ROOT / "val",
     "test_dir":  DATA_ROOT / "test",
     # ── 모델 저장 ──
-    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef.pth",
-    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints",
+    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef_v3.pth",
+    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_beef_v3",
     # ── 학습 하이퍼파라미터 ──
     "num_epochs": 30,
     "batch_size": 32,
