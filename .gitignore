@@ -79,3 +79,7 @@ desktop.ini
 # ==============================
 *.log
 logs/
+
+
+data_cleaning/
+models/

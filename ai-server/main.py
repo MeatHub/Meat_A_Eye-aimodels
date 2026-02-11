@@ -5,10 +5,10 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware  # 웹 필수: CORS 설정
 
-from core.web_processor import process_web_image
-from core.vision_engine import predict_part
-from core.ocr_engine import extract_text
-from core.predict_b2 import get_predict_engine
+from web_processor import process_web_image
+from vision_engine import predict_part
+from ocr_engine import extract_text
+from predict_b2 import get_predict_engine
 
 app = FastAPI(title="Meat-A-Eye AI Web Server")
 
