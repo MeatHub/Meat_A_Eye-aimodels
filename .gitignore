@@ -5,16 +5,17 @@
 venv/
 **/venv/
 **/.venv/
+*venv/
 
 # ==============================
 # Data & Models (대용량 파일)
 # ==============================
-# 데이터셋 (용량 큼)
 data/
 dataset/
 dataset_final/
 test_results/
 outputs/
+.tmp/
 
 # 모델 가중치 파일 (GitHub에 업로드 금지)
 *.pth
@@ -31,9 +32,6 @@ models/*.onnx
 .cache/
 **/.cache/
 
-# ⚠️ train.py는 제외하지 말 것 (학습 스크립트 필요)
-# *train.py  # <-- 이 라인 삭제됨
-
 # ==============================
 # Python Cache
 # ==============================
@@ -42,6 +40,15 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # ==============================
 # IDE / Editor
