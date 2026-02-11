@@ -6,6 +6,10 @@ venv/
 **/venv/
 **/.venv/
 *venv/
+# 프로젝트 가상환경 (하나만 사용 권장: venv_ppocr)
+paddle_env/
+paddle_ocr_env/
+venv_ppocr/
 
 # ==============================
 # Data & Models (대용량 파일)
