@@ -28,7 +28,7 @@ CONFIG = {
     "dataset_root": Path(__file__).resolve().parent.parent / "data" / "dataset_final",
     "model_save_path": Path(__file__).resolve().parent / "models" / "meat_vision_b2_pro.pth",
     "pretrained_model_path": Path(__file__).resolve().parent / "models" / "meat_vision_b2_pro.pth",  # 파인튜닝용 기존 모델 경로
-    "num_epochs": 20,             # 전체 학습 권장 15~25 / 파인튜닝 시 3~5
+    "num_epochs": 30,             # 전체 학습 권장 15~30 / 파인튜닝 시 3~5
     "batch_size": 16,             # 맥북 에어 권장 (메모리 부족 시 8로 줄이세요)
     "learning_rate": 5e-6,        # Backbone (ImageNet 파인튜닝)
     "head_learning_rate": 5e-4,   # Classifier
@@ -64,28 +64,37 @@ if MODE == "pork_focus":
 os.makedirs(Path(CONFIG["model_save_path"]).parent, exist_ok=True)
 
 # ===== [핵심 1] 증강 전략 =====
+# 👉 기존보다 “약하게”: 블러/노이즈/CoarseDropout 제거, 기하/색상 변형도 범위·확률 축소
 train_transform = A.Compose([
     A.Resize(CONFIG["image_size"], CONFIG["image_size"]),
-    A.Affine(translate_percent=0.15, scale=(0.7, 1.3), rotate=(-40, 40), p=0.7),
-    A.HorizontalFlip(p=0.5),
-    A.VerticalFlip(p=0.3),
-    A.ColorJitter(
-        brightness=0.4,
-        contrast=0.4,
-        saturation=0.4,
-        hue=0.1,
-        p=0.8,
+    # 위치/크기/각도: 살짝만 변형
+    A.Affine(
+        translate_percent=0.10,
+        scale=(0.85, 1.15),
+        rotate=(-20, 20),
+        p=0.5,
     ),
-    A.GaussianBlur(blur_limit=(3, 7), p=0.5),
-    A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=0.5),
-    A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
-    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5),
-    A.CLAHE(clip_limit=2.0, p=0.3),
-    A.CoarseDropout(
-        num_holes_range=(1, 8), 
-        hole_height_range=(0.02, 0.1), 
-        hole_width_range=(0.02, 0.1), 
-        p=0.5
+    A.HorizontalFlip(p=0.5),
+    # 색감: 과하지 않게 조정
+    A.ColorJitter(
+        brightness=0.25,
+        contrast=0.25,
+        saturation=0.25,
+        hue=0.05,
+        p=0.6,
+    ),
+    # 살짝만 흐리게 (과한 블러 방지)
+    A.GaussianBlur(blur_limit=(3, 5), p=0.2),
+    A.RandomBrightnessContrast(
+        brightness_limit=0.2,
+        contrast_limit=0.2,
+        p=0.4,
+    ),
+    A.HueSaturationValue(
+        hue_shift_limit=8,
+        sat_shift_limit=15,
+        val_shift_limit=8,
+        p=0.4,
     ),
     A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ToTensorV2(),
