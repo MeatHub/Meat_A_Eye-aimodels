@@ -10,14 +10,27 @@ from tqdm import tqdm
 
 # 1. 설정
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\ai-server\models\vision_b2_imagenet.pth"
-TEST_IMAGE_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data\test_images"
+MODEL_PATH = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\ai-server\models\b2_imagenet_beef_100-v1.pth"
+TEST_IMAGE_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data\train_dataset_1\test"  # 부위별 서브폴더 구조
 RESULT_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\test_results"
 
 CLASS_NAMES = ['Beef_BottomRound', 'Beef_Brisket', 'Beef_Chuck', 'Beef_Rib', 'Beef_Ribeye', 'Beef_Round', 'Beef_Shank', 'Beef_Shoulder', 'Beef_Sirloin', 'Beef_Tenderloin']
 IMAGE_SIZE = 260
 
 os.makedirs(RESULT_DIR, exist_ok=True)
+
+
+def collect_test_images(base_dir):
+    """부위별 서브폴더에서 모든 이미지 수집 (경로, 정답 클래스)"""
+    images = []
+    for class_name in CLASS_NAMES:
+        class_dir = os.path.join(base_dir, class_name)
+        if not os.path.exists(class_dir):
+            continue
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.webp']:
+            for img_path in glob.glob(os.path.join(class_dir, ext)):
+                images.append((img_path, class_name))
+    return images
 
 # Grad-CAM 클래스 (B2 대응)
 class GradCAM:
@@ -61,26 +74,29 @@ transform = transforms.Compose([
 ])
 
 def run_visual_test():
-    image_files = glob.glob(os.path.join(TEST_IMAGE_DIR, "*.*"))
-    print(f"\n🚀 [분석 시작] 총 {len(image_files)}개의 이미지 검증 중...")
-    print("-" * 80)
-    print(f"{'파일명':<30} | {'실제 정답':<15} | {'모델 예측':<15} | {'신뢰도':<8} | {'결과'}")
-    print("-" * 80)
+    # 부위별 서브폴더에서 이미지 수집
+    image_list = collect_test_images(TEST_IMAGE_DIR)
+    print(f"\n🚀 [분석 시작] 총 {len(image_list)}개의 이미지 검증 중...")
+    print(f"📂 테스트 폴더: {TEST_IMAGE_DIR}")
+    print("-" * 90)
+    print(f"{'파일명':<35} | {'실제 정답':<18} | {'모델 예측':<18} | {'신뢰도':<8} | {'결과'}")
+    print("-" * 90)
 
     correct_count = 0
     total_count = 0
+    
+    # 클래스별 통계
+    class_stats = {name: {"correct": 0, "total": 0, "wrong_preds": []} for name in CLASS_NAMES}
+    
+    # 클래스별 결과 폴더 생성
+    for class_name in CLASS_NAMES:
+        os.makedirs(os.path.join(RESULT_DIR, class_name), exist_ok=True)
+    os.makedirs(os.path.join(RESULT_DIR, "_wrong"), exist_ok=True)  # 오답 모음
 
-    for img_path in image_files:
+    for img_path, ground_truth in image_list:
         filename = os.path.basename(img_path)
         raw_img = cv2.imread(img_path)
         if raw_img is None: continue
-        
-        # 파일명에서 정답 추출 (이전 병합 로직 기반)
-        ground_truth = "Unknown"
-        for name in CLASS_NAMES:
-            if name in filename:
-                ground_truth = name
-                break
 
         # 전처리 및 추론
         raw_img_rgb = cv2.cvtColor(raw_img, cv2.COLOR_BGR2RGB)
@@ -97,7 +113,13 @@ def run_visual_test():
 
         # 정확도 계산
         is_correct = (pred_label == ground_truth)
-        if is_correct: correct_count += 1
+        if is_correct: 
+            correct_count += 1
+            class_stats[ground_truth]["correct"] += 1
+        else:
+            class_stats[ground_truth]["wrong_preds"].append((filename, pred_label, confidence))
+        
+        class_stats[ground_truth]["total"] += 1
         total_count += 1
         result_mark = "✅" if is_correct else "❌"
 
@@ -118,17 +140,48 @@ def run_visual_test():
         cv2.putText(info_bar, text, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
         final_report = np.vstack((info_bar, combined_view))
 
-        # 저장 및 출력
-        cv2.imwrite(os.path.join(RESULT_DIR, f"report_{filename}"), cv2.cvtColor(final_report, cv2.COLOR_RGB2BGR))
-        print(f"{filename[:30]:<30} | {ground_truth:<15} | {pred_label:<15} | {confidence*100:>6.1f}% | {result_mark}")
+        # 저장 (클래스별 폴더 + 오답은 _wrong 폴더에도 저장)
+        save_path = os.path.join(RESULT_DIR, ground_truth, f"report_{filename}")
+        cv2.imwrite(save_path, cv2.cvtColor(final_report, cv2.COLOR_RGB2BGR))
+        
+        if not is_correct:
+            wrong_path = os.path.join(RESULT_DIR, "_wrong", f"{ground_truth}_to_{pred_label}_{filename}")
+            cv2.imwrite(wrong_path, cv2.cvtColor(final_report, cv2.COLOR_RGB2BGR))
+        
+        print(f"{filename[:35]:<35} | {ground_truth:<18} | {pred_label:<18} | {confidence*100:>6.1f}% | {result_mark}")
+
+    # 클래스별 정확도 요약
+    print("\n" + "=" * 90)
+    print("📊 [클래스별 정확도]")
+    print("=" * 90)
+    print(f"{'클래스':<22} | {'맞춤':>6} | {'전체':>6} | {'정확도':>10} | {'주요 오분류'}")
+    print("-" * 90)
+    
+    for name in CLASS_NAMES:
+        stats = class_stats[name]
+        acc = (stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0
+        
+        # 주요 오분류 분석
+        wrong_summary = ""
+        if stats["wrong_preds"]:
+            wrong_classes = {}
+            for _, wrong_pred, _ in stats["wrong_preds"]:
+                wrong_classes[wrong_pred] = wrong_classes.get(wrong_pred, 0) + 1
+            top_wrong = sorted(wrong_classes.items(), key=lambda x: -x[1])[:2]
+            wrong_summary = ", ".join([f"{k}({v})" for k, v in top_wrong])
+        
+        acc_bar = "█" * int(acc // 10) + "░" * (10 - int(acc // 10))
+        print(f"{name:<22} | {stats['correct']:>6} | {stats['total']:>6} | {acc:>6.1f}% {acc_bar} | {wrong_summary}")
 
     # 최종 요약
     accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0
-    print("-" * 80)
+    print("=" * 90)
     print(f"📊 [최종 결과] 전체: {total_count} | 맞춤: {correct_count} | 틀림: {total_count-correct_count}")
     print(f"🎯 최종 정확도(Accuracy): {accuracy:.2f}%")
-    print("-" * 80)
+    print("=" * 90)
     print(f"📂 상세 리포트 저장 위치: {RESULT_DIR}")
+    print(f"   - 클래스별 폴더: 각 부위별 결과")
+    print(f"   - _wrong 폴더: 오답만 모아보기")
 
 if __name__ == "__main__":
     run_visual_test()

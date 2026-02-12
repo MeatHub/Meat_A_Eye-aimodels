@@ -1,13 +1,3 @@
-"""
-Fine-tuning Script for Existing Beef Classification Model
-
-기존 학습된 가중치(b2_imagenet_beef.pth)에서 이어서 학습하는 스크립트입니다.
-새로운 데이터를 추가했거나, 특정 클래스를 보강한 후 사용하세요.
-
-Usage:
-    python finetune.py
-"""
-
 import os
 import json
 import time
@@ -20,60 +10,65 @@ from pathlib import Path
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
+import random
 from collections import Counter
+from datasets import load_dataset
 from dotenv import load_dotenv
+import matplotlib.pyplot as plt
+import pandas as pd
 
 load_dotenv()
 
-# ===== Fine-tuning 설정 =====
-DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_v4"
+# ===== 설정 =====
+DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_1"
+CONFIG = {
+    "train_dir": DATA_ROOT.parent / "train_dataset_2" / "train",
+    "val_dir":   DATA_ROOT.parent / "train_dataset_2" / "val",
+    "test_dir":  DATA_ROOT.parent / "train_dataset_2" / "test",
+    
+    # ── 모델 저장 ──
+    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v2.pth",
 
-FINETUNE_CONFIG = {
-    # ── 데이터 경로 ──
-    "train_dir": DATA_ROOT / "train",
-    "val_dir":   DATA_ROOT / "val",
-    "test_dir":  DATA_ROOT / "test",
-    
-    # ── 기존 모델 경로 (이어서 학습할 모델) ──
-    "pretrained_model": Path(__file__).parent.parent / "models" / "b2_imagenet_beef.pth",
-    "pretrained_meta":  Path(__file__).parent.parent / "models" / "b2_imagenet_beef.json",
-    
-    # ── 새 모델 저장 경로 ──
-    "model_save_path": Path(__file__).parent.parent / "models" / "b2_imagenet_beef_finetuned.pth",
-    "checkpoint_dir":  Path(__file__).parent.parent / "models" / "checkpoints_finetuned",
-    
-    # ── Fine-tuning 하이퍼파라미터 (기존보다 낮은 LR 권장) ──
-    "num_epochs": 20,
+    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_beef_100-v2",
+
+    "history_path": Path(__file__).parent / "models" / "training_history.json",  # 학습 히스토리
+
+    # ── 파인튜닝 설정(기존 모델) ──
+    "finetune_from": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v1.pth",
+
+    "freeze_backbone_epochs": 0,   # 초기 N 에폭 동안 backbone 동결 (0=동결 안함)
+
+    # ── 학습 하이퍼파라미터 ──
+    "num_epochs": 30,
     "batch_size": 32,
-    "learning_rate": 5e-5,         # 기존 1e-4 → 더 낮게 (fine-tuning)
-    "head_learning_rate": 5e-4,    # 기존 1e-3 → 더 낮게
+    "learning_rate": 1e-4,         # Backbone (features) 학습률
+    "head_learning_rate": 1e-3,    # Classifier (head) 학습률
     "image_size": 260,
     "num_workers": 8,
-    "mixup_alpha": 0.15,           # 약간 낮춤 (이미 잘 학습된 모델)
-    "label_smoothing": 0.05,       # 약간 낮춤
+    "mixup_alpha": 0.2,
+    "label_smoothing": 0.1,
     "weight_decay": 1e-2,
-    "grad_clip_max_norm": 1.0,
-    
+    "grad_clip_max_norm": 1.0,     # Gradient clipping
     # ── Early Stopping ──
-    "patience": 8,
-    
-    # ── LR Warmup (짧게) ──
-    "warmup_epochs": 1,
-    
-    # ── TTA ──
-    "tta_transforms": 5,
-    
+    "patience": 10,                # val_acc 개선 없으면 N epoch 후 중단
+    # ── LR Warmup ──
+    "warmup_epochs": 3,            # 선형 warmup 에폭 수
+    # ── TTA (Test Time Augmentation) ──
+    "tta_transforms": 5,           # 테스트 시 증강 횟수 (1 = 증강 없음)
     # ── Class Weighting ──
-    "use_weighted_sampler": True,
-    
-    # ── Focus Classes (낮은 성능 클래스에 추가 가중치) ──
-    "focus_classes": ["Beef_BottomRound", "Beef_Shoulder"],
-    "focus_weight_multiplier": 1.5,  # 이 클래스들의 샘플 가중치 1.5배
+    "use_weighted_sampler": True,  # 클래스 불균형 보정
+    # ── ImageNet 사전학습 (선택) ──
+    "imagenet_dataset_id": "ILSVRC/imagenet-1k",
+    "imagenet_pretrain_epochs": 0,
+    "imagenet_batch_size": 64,
+    "imagenet_max_samples": 100_000,
+    "imagenet_model_path": Path(__file__).parent / "models" / "efficientnet_b2_imagenet.pth",
+    "hf_token": None,
 }
 
-# ===== Augmentation (기존과 동일) =====
+# ===== [핵심 1] 증강 전략 — 소고기 부위 질감·색상·마블링 특화 =====
 train_transform = A.Compose([
-    A.Resize(FINETUNE_CONFIG["image_size"], FINETUNE_CONFIG["image_size"]),
+    A.Resize(CONFIG["image_size"], CONFIG["image_size"]),
     A.Affine(translate_percent=0.1, scale=(0.8, 1.2), rotate=(-30, 30), p=0.5),
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.3),
@@ -93,13 +88,14 @@ train_transform = A.Compose([
 ])
 
 val_transform = A.Compose([
-    A.Resize(FINETUNE_CONFIG["image_size"], FINETUNE_CONFIG["image_size"]),
+    A.Resize(CONFIG["image_size"], CONFIG["image_size"]),
     A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ToTensorV2(),
 ])
 
+# TTA용 경량 증강 (테스트 시 여러 번 적용 후 평균)
 tta_transform = A.Compose([
-    A.Resize(FINETUNE_CONFIG["image_size"], FINETUNE_CONFIG["image_size"]),
+    A.Resize(CONFIG["image_size"], CONFIG["image_size"]),
     A.HorizontalFlip(p=0.5),
     A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
     A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -107,7 +103,7 @@ tta_transform = A.Compose([
 ])
 
 
-# ===== Mixup =====
+# ===== [핵심 2] Mixup =====
 def mixup_data(x, y, alpha=1.0):
     if alpha > 0:
         lam = np.random.beta(alpha, alpha)
@@ -124,8 +120,9 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 
-# ===== Dataset =====
+# ===== Dataset 래퍼 =====
 class AlbumentationsDataset(torch.utils.data.Dataset):
+    """ImageFolder 결과를 Albumentations 증강과 연결."""
     def __init__(self, dataset, transform=None):
         self.dataset = dataset
         self.transform = transform
@@ -141,54 +138,50 @@ class AlbumentationsDataset(torch.utils.data.Dataset):
         return image, label
 
 
-# ===== Model Loading (기존 가중치 로드) =====
-def load_pretrained_model(pretrained_path, meta_path, device):
-    """기존 학습된 모델을 로드합니다."""
-    
-    # 메타데이터 로드
-    with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    
-    num_classes = meta["num_classes"]
-    class_to_idx = meta["class_to_idx"]
-    
-    # 모델 구조 생성
-    model = models.efficientnet_b2(weights=None)  # 사전학습 가중치 사용 안함
+class ImageNetAlbumentationsDataset(torch.utils.data.Dataset):
+    """HuggingFace ImageNet → Albumentations 호환 래퍼."""
+    def __init__(self, hf_dataset, transform=None):
+        self.hf_dataset = hf_dataset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.hf_dataset)
+
+    def __getitem__(self, idx):
+        row = self.hf_dataset[idx]
+        image = np.array(row["image"].convert("RGB"))
+        label = row["label"]
+        if self.transform:
+            image = self.transform(image=image)["image"]
+        return image, label
+
+
+# ===== 모델 생성 =====
+def create_model_b2(num_classes: int, pretrained_path=None):
+    model = models.efficientnet_b2(weights=models.EfficientNet_B2_Weights.DEFAULT)
     model.classifier = nn.Sequential(
         nn.Dropout(p=0.4, inplace=True),
         nn.Linear(model.classifier[1].in_features, num_classes),
     )
-    
-    # 학습된 가중치 로드
-    state = torch.load(pretrained_path, map_location=device, weights_only=True)
-    model.load_state_dict(state)
-    
-    print(f"  ✓ 기존 모델 로드 완료: {pretrained_path}")
-    print(f"    - Epoch: {meta.get('epoch', 'N/A')}")
-    print(f"    - Val Acc: {meta.get('val_acc', 'N/A'):.4f}")
-    print(f"    - Classes: {num_classes}")
-    
-    return model.to(device), class_to_idx, meta
+    if pretrained_path and Path(pretrained_path).exists():
+        state = torch.load(pretrained_path, map_location="cpu", weights_only=True)
+        state = {k: v for k, v in state.items() if not k.startswith("classifier")}
+        model.load_state_dict(state, strict=False)
+        print(f"  ✓ Backbone 로드: {pretrained_path}")
+    return model
 
 
-# ===== WeightedRandomSampler with Focus Classes =====
-def make_focused_weighted_sampler(dataset, class_to_idx, focus_classes, focus_multiplier=1.5):
-    """특정 클래스(focus_classes)에 추가 가중치를 부여하는 샘플러."""
+def create_model_imagenet():
+    return models.efficientnet_b2(weights=models.EfficientNet_B2_Weights.DEFAULT)
+
+
+# ===== WeightedRandomSampler 생성 =====
+def make_weighted_sampler(dataset: datasets.ImageFolder) -> WeightedRandomSampler:
+    """클래스 불균형 보정을 위한 가중 샘플러 생성."""
     targets = dataset.targets
     class_counts = Counter(targets)
     num_samples = len(targets)
-    
-    # 기본 클래스 가중치 계산
     class_weights = {cls: num_samples / count for cls, count in class_counts.items()}
-    
-    # Focus 클래스에 추가 가중치
-    focus_indices = [class_to_idx[c] for c in focus_classes if c in class_to_idx]
-    for idx in focus_indices:
-        if idx in class_weights:
-            class_weights[idx] *= focus_multiplier
-            class_name = [k for k, v in class_to_idx.items() if v == idx][0]
-            print(f"    ✓ Focus class '{class_name}' weight x{focus_multiplier}")
-    
     sample_weights = [class_weights[t] for t in targets]
     return WeightedRandomSampler(
         weights=sample_weights,
@@ -199,24 +192,28 @@ def make_focused_weighted_sampler(dataset, class_to_idx, focus_classes, focus_mu
 
 # ===== Early Stopping =====
 class EarlyStopping:
-    def __init__(self, patience=10, min_delta=1e-4):
+    def __init__(self, patience: int = 10, min_delta: float = 1e-4):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
         self.best_score = None
 
-    def __call__(self, val_acc):
+    def __call__(self, val_acc: float) -> bool:
         if self.best_score is None or val_acc > self.best_score + self.min_delta:
             self.best_score = val_acc
             self.counter = 0
-            return False
+            return False  # 계속 학습
         self.counter += 1
-        return self.counter >= self.patience
+        if self.counter >= self.patience:
+            print(f"  ⏹ Early Stopping 발동 (patience={self.patience}, best={self.best_score:.4f})")
+            return True  # 학습 중단
+        return False
 
 
-# ===== LR Scheduler =====
+# ===== LR Warmup + CosineAnnealing 스케줄러 =====
 class WarmupCosineScheduler:
-    def __init__(self, optimizer, warmup_epochs, total_epochs, warmup_start_lr=1e-7):
+    """Linear warmup → CosineAnnealingWarmRestarts."""
+    def __init__(self, optimizer, warmup_epochs, total_epochs, warmup_start_lr=1e-6):
         self.optimizer = optimizer
         self.warmup_epochs = warmup_epochs
         self.warmup_start_lr = warmup_start_lr
@@ -229,6 +226,7 @@ class WarmupCosineScheduler:
     def step(self):
         self.current_epoch += 1
         if self.current_epoch <= self.warmup_epochs:
+            # Linear warmup
             alpha = self.current_epoch / self.warmup_epochs
             for pg, base_lr in zip(self.optimizer.param_groups, self.base_lrs):
                 pg["lr"] = self.warmup_start_lr + alpha * (base_lr - self.warmup_start_lr)
@@ -239,24 +237,39 @@ class WarmupCosineScheduler:
         return [pg["lr"] for pg in self.optimizer.param_groups]
 
 
-# ===== Evaluation =====
-def evaluate(model, loader, device, class_names):
+# ===== 평가 함수 =====
+def evaluate(model, loader, device, class_names, criterion=None):
+    """Validation/Test 세트 평가 — accuracy + loss + per-class precision/recall/F1."""
     model.eval()
     num_classes = len(class_names)
-    confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)
+    confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)  # [pred, true]
+    total_loss = 0.0
+    total_samples = 0
 
     with torch.no_grad():
         for inputs, labels in loader:
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
+            
+            # Loss 계산 (criterion이 주어진 경우)
+            if criterion is not None:
+                loss = criterion(outputs, labels)
+                total_loss += loss.item() * inputs.size(0)
+                total_samples += inputs.size(0)
+            
             preds = outputs.argmax(dim=1)
             for p, t in zip(preds.cpu(), labels.cpu()):
                 confusion[p, t] += 1
 
+    # Overall accuracy
     total = confusion.sum().item()
     correct = confusion.diag().sum().item()
     accuracy = correct / total if total > 0 else 0.0
+    
+    # Average loss
+    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
 
+    # Per-class metrics
     per_class = {}
     for i, name in enumerate(class_names):
         tp = confusion[i, i].item()
@@ -267,10 +280,11 @@ def evaluate(model, loader, device, class_names):
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
         per_class[name] = {"precision": precision, "recall": recall, "f1": f1}
 
-    return accuracy, per_class, confusion
+    return accuracy, avg_loss, per_class, confusion
 
 
 def evaluate_with_tta(model, dataset_raw, device, class_names, num_augments=5):
+    """Test Time Augmentation — 여러 번 증강 후 소프트맥스 평균으로 예측."""
     model.eval()
     num_classes = len(class_names)
     confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)
@@ -279,6 +293,7 @@ def evaluate_with_tta(model, dataset_raw, device, class_names, num_augments=5):
         image, label = dataset_raw[idx]
         img_np = np.array(image)
 
+        # 원본 (val_transform) + N-1 번 tta_transform
         logits_sum = None
         for i in range(num_augments):
             tf = val_transform if i == 0 else tta_transform
@@ -305,10 +320,11 @@ def evaluate_with_tta(model, dataset_raw, device, class_names, num_augments=5):
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
         per_class[name] = {"precision": precision, "recall": recall, "f1": f1}
 
-    return accuracy, per_class, confusion
+    return accuracy, 0.0, per_class, confusion  # TTA는 loss 반환 안함
 
 
 def print_metrics(accuracy, per_class, class_names, title="Evaluation"):
+    """평가 결과를 보기 좋게 출력."""
     print(f"\n{'='*60}")
     print(f"  {title}")
     print(f"{'='*60}")
@@ -319,8 +335,7 @@ def print_metrics(accuracy, per_class, class_names, title="Evaluation"):
     macro_p, macro_r, macro_f1 = 0, 0, 0
     for name in class_names:
         m = per_class[name]
-        mark = " ⚠️" if m['f1'] < 0.92 else ""
-        print(f"  {name:<22} {m['precision']:>7.4f} {m['recall']:>7.4f} {m['f1']:>7.4f}{mark}")
+        print(f"  {name:<22} {m['precision']:>7.4f} {m['recall']:>7.4f} {m['f1']:>7.4f}")
         macro_p += m["precision"]
         macro_r += m["recall"]
         macro_f1 += m["f1"]
@@ -330,21 +345,23 @@ def print_metrics(accuracy, per_class, class_names, title="Evaluation"):
     print(f"{'='*60}\n")
 
 
-# ===== Checkpoint Save =====
-def save_checkpoint(model, class_to_idx, epoch, val_acc, path, config):
+# ===== 모델 저장 (메타데이터 포함) =====
+def save_checkpoint(model, class_to_idx, epoch, val_acc, path):
+    """모델 가중치 + 메타데이터를 함께 저장."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    # state_dict만 저장 (predict_b2.py 호환)
     torch.save(model.state_dict(), path)
-    
+
+    # 메타데이터를 별도 JSON에 저장
     meta = {
         "epoch": epoch,
         "val_acc": val_acc,
         "num_classes": len(class_to_idx),
         "class_to_idx": class_to_idx,
         "idx_to_class": {v: k for k, v in class_to_idx.items()},
-        "image_size": config["image_size"],
-        "fine_tuned": True,
-        "base_model": str(config["pretrained_model"]),
+        "image_size": CONFIG["image_size"],
     }
     meta_path = path.with_suffix(".json")
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -352,41 +369,81 @@ def save_checkpoint(model, class_to_idx, epoch, val_acc, path, config):
     print(f"  💾 모델 저장: {path.name}  |  메타: {meta_path.name}")
 
 
-# ===== Main =====
+# ===== 메인 =====
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     if device.type == "cuda":
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
+    pretrained_path = None
 
-    print("\n" + "="*60)
-    print("  Fine-tuning 모드 - 기존 모델에서 이어서 학습")
-    print("="*60)
+    # ────────────────────────────────────────────────
+    # [Phase 1] ImageNet 사전학습 (선택, epochs=0이면 스킵)
+    # ────────────────────────────────────────────────
+    if CONFIG["imagenet_pretrain_epochs"] > 0:
+        print("\n[Phase 1] ImageNet 사전학습 시작")
+        hf_token = CONFIG.get("hf_token") or os.environ.get("HF_TOKEN")
+        if not hf_token:
+            print("  ⚠ ImageNet(gated) 접근을 위해 HF 토큰이 필요합니다.")
+            print("  CONFIG['hf_token'] 또는 .env HF_TOKEN 설정 후 재실행.")
+            raise RuntimeError("HF_TOKEN not set.")
+        try:
+            imagenet_dataset = load_dataset(
+                CONFIG["imagenet_dataset_id"], split="train", token=hf_token,
+            )
+        except Exception as e:
+            if "gated" in str(e).lower() or "DatasetNotFoundError" in type(e).__name__:
+                print("  ⚠ ImageNet은 gated 데이터셋입니다. HF 이용약관 동의 필요.")
+            raise
+        if CONFIG["imagenet_max_samples"] is not None:
+            n = min(len(imagenet_dataset), CONFIG["imagenet_max_samples"])
+            imagenet_dataset = imagenet_dataset.select(range(n))
+            print(f"  ImageNet 서브셋: {n:,} 샘플")
+        ds = ImageNetAlbumentationsDataset(imagenet_dataset, val_transform)
+        il = DataLoader(ds, batch_size=CONFIG["imagenet_batch_size"],
+                        shuffle=True, num_workers=CONFIG["num_workers"], pin_memory=True)
+        model_imagenet = create_model_imagenet().to(device)
+        opt = optim.AdamW(model_imagenet.parameters(), lr=1e-4, weight_decay=1e-2)
+        crit = nn.CrossEntropyLoss()
+        for ep in range(CONFIG["imagenet_pretrain_epochs"]):
+            model_imagenet.train()
+            running, correct, total = 0.0, 0, 0
+            for x, y in il:
+                x, y = x.to(device), y.to(device)
+                opt.zero_grad()
+                out = model_imagenet(x)
+                loss = crit(out, y)
+                loss.backward()
+                opt.step()
+                running += loss.item()
+                correct += (out.argmax(1) == y).sum().item()
+                total += y.size(0)
+            print(f"  ImageNet Epoch [{ep+1}/{CONFIG['imagenet_pretrain_epochs']}] "
+                  f"Loss: {running/len(il):.4f}  Acc: {correct/total:.4f}")
+        CONFIG["imagenet_model_path"].parent.mkdir(parents=True, exist_ok=True)
+        torch.save(model_imagenet.state_dict(), CONFIG["imagenet_model_path"])
+        pretrained_path = CONFIG["imagenet_model_path"]
+        del model_imagenet, il, ds, imagenet_dataset
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
-    # ── 기존 모델 로드 ──
-    model, class_to_idx, meta = load_pretrained_model(
-        FINETUNE_CONFIG["pretrained_model"],
-        FINETUNE_CONFIG["pretrained_meta"],
-        device
-    )
-    class_names = list(class_to_idx.keys())
+    # ────────────────────────────────────────────────
+    # [Phase 2] 소고기 부위 분류 Fine-tuning
+    # ────────────────────────────────────────────────
+    print("\n[Phase 2] 소고기 부위 분류 Fine-tuning")
+
+    # 데이터 로드 (실제 train / val / test 디렉토리 사용)
+    for split, d in [("train", CONFIG["train_dir"]), ("val", CONFIG["val_dir"]), ("test", CONFIG["test_dir"])]:
+        if not Path(d).exists():
+            raise FileNotFoundError(f"{split} 경로가 없습니다: {d}")
+
+    train_dataset = datasets.ImageFolder(root=str(CONFIG["train_dir"]))
+    val_dataset   = datasets.ImageFolder(root=str(CONFIG["val_dir"]))
+    test_dataset  = datasets.ImageFolder(root=str(CONFIG["test_dir"]))
+
+    class_names = train_dataset.classes
+    class_to_idx = train_dataset.class_to_idx
     num_classes = len(class_names)
-
-    # ── 데이터 로드 ──
-    print("\n[데이터 로드]")
-    train_dataset = datasets.ImageFolder(root=str(FINETUNE_CONFIG["train_dir"]))
-    val_dataset   = datasets.ImageFolder(root=str(FINETUNE_CONFIG["val_dir"]))
-    test_dataset  = datasets.ImageFolder(root=str(FINETUNE_CONFIG["test_dir"]))
-
-    # 클래스 일치 확인
-    if train_dataset.class_to_idx != class_to_idx:
-        print("  ⚠️ 경고: 데이터셋 클래스와 모델 클래스가 다릅니다!")
-        print(f"    모델: {list(class_to_idx.keys())}")
-        print(f"    데이터: {train_dataset.classes}")
-        # 계속 진행 여부 확인
-        response = input("  계속 진행하시겠습니까? (y/n): ")
-        if response.lower() != 'y':
-            return
 
     # 클래스 분포 출력
     train_counts = Counter(train_dataset.targets)
@@ -396,67 +453,87 @@ def main():
     for idx in sorted(train_counts.keys()):
         name = class_names[idx]
         count = train_counts[idx]
-        focus_mark = " ← FOCUS" if name in FINETUNE_CONFIG["focus_classes"] else ""
         bar = "█" * (count // 10)
-        print(f"    {name:<22} {count:>4}  {bar}{focus_mark}")
+        print(f"    {name:<22} {count:>4}  {bar}")
 
-    # ── DataLoader ──
-    if FINETUNE_CONFIG["use_weighted_sampler"]:
-        sampler = make_focused_weighted_sampler(
-            train_dataset, 
-            class_to_idx,
-            FINETUNE_CONFIG["focus_classes"],
-            FINETUNE_CONFIG["focus_weight_multiplier"]
-        )
+    # DataLoader 구성
+    if CONFIG["use_weighted_sampler"]:
+        sampler = make_weighted_sampler(train_dataset)
         train_loader = DataLoader(
             AlbumentationsDataset(train_dataset, train_transform),
-            batch_size=FINETUNE_CONFIG["batch_size"],
+            batch_size=CONFIG["batch_size"],
             sampler=sampler,
-            num_workers=FINETUNE_CONFIG["num_workers"],
+            num_workers=CONFIG["num_workers"],
             pin_memory=True,
         )
+        print("  ✓ WeightedRandomSampler 적용 (클래스 불균형 보정)")
     else:
         train_loader = DataLoader(
             AlbumentationsDataset(train_dataset, train_transform),
-            batch_size=FINETUNE_CONFIG["batch_size"],
+            batch_size=CONFIG["batch_size"],
             shuffle=True,
-            num_workers=FINETUNE_CONFIG["num_workers"],
+            num_workers=CONFIG["num_workers"],
             pin_memory=True,
         )
 
     val_loader = DataLoader(
         AlbumentationsDataset(val_dataset, val_transform),
-        batch_size=FINETUNE_CONFIG["batch_size"],
+        batch_size=CONFIG["batch_size"],
         shuffle=False,
-        num_workers=FINETUNE_CONFIG["num_workers"],
+        num_workers=CONFIG["num_workers"],
         pin_memory=True,
     )
 
-    # ── Optimizer (낮은 LR로 fine-tuning) ──
-    optimizer = optim.AdamW([
-        {"params": model.features.parameters(), "lr": FINETUNE_CONFIG["learning_rate"]},
-        {"params": model.classifier.parameters(), "lr": FINETUNE_CONFIG["head_learning_rate"]},
-    ], weight_decay=FINETUNE_CONFIG["weight_decay"])
-
-    criterion = nn.CrossEntropyLoss(label_smoothing=FINETUNE_CONFIG["label_smoothing"])
-    scheduler = WarmupCosineScheduler(
-        optimizer, 
-        FINETUNE_CONFIG["warmup_epochs"], 
-        FINETUNE_CONFIG["num_epochs"]
-    )
-    early_stopping = EarlyStopping(patience=FINETUNE_CONFIG["patience"])
-
-    # 기존 모델의 val_acc를 초기 best로 설정
-    best_val_acc = meta.get("val_acc", 0.0)
-    print(f"\n  초기 Best Val Acc (기존 모델): {best_val_acc:.4f}")
+    # 모델
+    model = create_model_b2(num_classes, pretrained_path=pretrained_path).to(device)
     
-    FINETUNE_CONFIG["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
+    # 파인튜닝: 기존 학습된 모델에서 이어서 학습
+    if CONFIG["finetune_from"] and Path(CONFIG["finetune_from"]).exists():
+        finetune_path = Path(CONFIG["finetune_from"])
+        state = torch.load(finetune_path, map_location=device, weights_only=True)
+        model.load_state_dict(state)
+        print(f"  ✓ 파인튜닝 모델 로드: {finetune_path.name}")
+        
+        # 메타데이터에서 이전 성능 확인
+        meta_path = finetune_path.with_suffix(".json")
+        if meta_path.exists():
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            print(f"    이전 성능: Val Acc {meta.get('val_acc', 'N/A'):.4f} (Epoch {meta.get('epoch', 'N/A')})")
 
-    print(f"\n  Fine-tuning 시작: {FINETUNE_CONFIG['num_epochs']} epochs")
-    print(f"  LR backbone={FINETUNE_CONFIG['learning_rate']}, head={FINETUNE_CONFIG['head_learning_rate']}")
+    # 차등 학습률: Backbone 느리게, Head 빠르게
+    optimizer = optim.AdamW([
+        {"params": model.features.parameters(), "lr": CONFIG["learning_rate"]},
+        {"params": model.classifier.parameters(), "lr": CONFIG["head_learning_rate"]},
+    ], weight_decay=CONFIG["weight_decay"])
+
+    criterion = nn.CrossEntropyLoss(label_smoothing=CONFIG["label_smoothing"])
+    scheduler = WarmupCosineScheduler(optimizer, CONFIG["warmup_epochs"], CONFIG["num_epochs"])
+    early_stopping = EarlyStopping(patience=CONFIG["patience"])
+
+    best_val_acc = 0.0
+    best_val_loss = float('inf')
+    CONFIG["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
+    
+    # 학습 히스토리 저장용
+    history = {
+        "config": {
+            "model_save_path": str(CONFIG["model_save_path"]),
+            "finetune_from": str(CONFIG["finetune_from"]) if CONFIG["finetune_from"] else None,
+            "num_epochs": CONFIG["num_epochs"],
+            "batch_size": CONFIG["batch_size"],
+            "learning_rate": CONFIG["learning_rate"],
+            "head_learning_rate": CONFIG["head_learning_rate"],
+        },
+        "epochs": []
+    }
+
+    print(f"\n  학습 시작: {CONFIG['num_epochs']} epochs, batch={CONFIG['batch_size']}, "
+          f"warmup={CONFIG['warmup_epochs']}, patience={CONFIG['patience']}")
+    print(f"  LR backbone={CONFIG['learning_rate']}, head={CONFIG['head_learning_rate']}")
     print(f"{'─'*70}")
 
-    for epoch in range(FINETUNE_CONFIG["num_epochs"]):
+    for epoch in range(CONFIG["num_epochs"]):
         epoch_start = time.time()
 
         # === Training ===
@@ -464,13 +541,18 @@ def main():
         train_loss, train_correct, train_total = 0.0, 0.0, 0
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
-            inputs, labels_a, labels_b, lam = mixup_data(inputs, labels, FINETUNE_CONFIG["mixup_alpha"])
+
+            # Mixup
+            inputs, labels_a, labels_b, lam = mixup_data(inputs, labels, CONFIG["mixup_alpha"])
 
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = mixup_criterion(criterion, outputs, labels_a, labels_b, lam)
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), FINETUNE_CONFIG["grad_clip_max_norm"])
+
+            # Gradient clipping
+            nn.utils.clip_grad_norm_(model.parameters(), CONFIG["grad_clip_max_norm"])
+
             optimizer.step()
 
             train_loss += loss.item() * inputs.size(0)
@@ -478,8 +560,8 @@ def main():
                               + (1 - lam) * (outputs.argmax(1) == labels_b).float().sum()).item()
             train_total += inputs.size(0)
 
-        # === Validation ===
-        val_acc, val_per_class, _ = evaluate(model, val_loader, device, class_names)
+        # === Validation (with loss) ===
+        val_acc, val_loss, val_per_class, _ = evaluate(model, val_loader, device, class_names, criterion)
 
         scheduler.step()
         elapsed = time.time() - epoch_start
@@ -487,60 +569,88 @@ def main():
         t_acc  = train_correct / train_total
         lrs = scheduler.get_last_lr()
 
-        print(f"  Epoch [{epoch+1:>3}/{FINETUNE_CONFIG['num_epochs']}]  "
+        print(f"  Epoch [{epoch+1:>3}/{CONFIG['num_epochs']}]  "
               f"Train Loss: {t_loss:.4f}  Train Acc: {t_acc:.4f}  |  "
-              f"Val Acc: {val_acc:.4f}  |  "
+              f"Val Loss: {val_loss:.4f}  Val Acc: {val_acc:.4f}  |  "
               f"LR: {lrs[0]:.2e}/{lrs[1]:.2e}  |  {elapsed:.1f}s")
+        
+        # 히스토리 기록
+        history["epochs"].append({
+            "epoch": epoch + 1,
+            "train_loss": round(t_loss, 4),
+            "train_acc": round(t_acc, 4),
+            "val_loss": round(val_loss, 4),
+            "val_acc": round(val_acc, 4),
+            "lr_backbone": lrs[0],
+            "lr_head": lrs[1],
+            "elapsed": round(elapsed, 1)
+        })
 
-        # Best 모델 저장
+        # Best 모델 저장 (Val Acc 기준)
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            save_checkpoint(model, class_to_idx, epoch + 1, val_acc, 
-                          FINETUNE_CONFIG["model_save_path"], FINETUNE_CONFIG)
-            print(f"  ⭐ Best Model Updated! (Val Acc: {val_acc:.4f})")
+            best_val_loss = val_loss
+            save_checkpoint(model, class_to_idx, epoch + 1, val_acc, CONFIG["model_save_path"])
+            print(f"  ⭐ Best Model Updated! (Val Acc: {val_acc:.4f}, Val Loss: {val_loss:.4f})")
 
-        # 주기적 체크포인트
+        # 주기적 체크포인트 (10 에폭마다)
         if (epoch + 1) % 10 == 0:
-            ckpt_path = FINETUNE_CONFIG["checkpoint_dir"] / f"finetune_epoch_{epoch+1:03d}.pth"
-            save_checkpoint(model, class_to_idx, epoch + 1, val_acc, ckpt_path, FINETUNE_CONFIG)
+            ckpt_path = CONFIG["checkpoint_dir"] / f"epoch_{epoch+1:03d}.pth"
+            save_checkpoint(model, class_to_idx, epoch + 1, val_acc, ckpt_path)
 
-        # Early Stopping
+        # Early Stopping 확인
         if early_stopping(val_acc):
-            print(f"  ⏹ Early Stopping at epoch {epoch+1}")
+            print(f"  → {epoch+1} epoch에서 학습 종료 (Early Stopping)")
             break
+    
+    # 학습 히스토리 저장
+    history["best_val_acc"] = best_val_acc
+    history["best_val_loss"] = best_val_loss
+    with open(CONFIG["history_path"], "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+    print(f"  📊 학습 히스토리 저장: {CONFIG['history_path'].name}")
 
-    # ── Test 평가 ──
-    print("\n[Test 세트 최종 평가]")
-    
-    # Best 모델 로드
-    if FINETUNE_CONFIG["model_save_path"].exists():
-        best_state = torch.load(FINETUNE_CONFIG["model_save_path"], map_location=device, weights_only=True)
-        model.load_state_dict(best_state)
-    
+    # ────────────────────────────────────────────────
+    # [Phase 3] Test 세트 최종 평가
+    # ────────────────────────────────────────────────
+    print("\n[Phase 3] Test 세트 최종 평가")
+
+    # Best 모델 다시 로드
+    best_state = torch.load(CONFIG["model_save_path"], map_location=device, weights_only=True)
+    model.load_state_dict(best_state)
     model.eval()
 
+    # 일반 평가
     test_loader = DataLoader(
         AlbumentationsDataset(test_dataset, val_transform),
-        batch_size=FINETUNE_CONFIG["batch_size"],
+        batch_size=CONFIG["batch_size"],
         shuffle=False,
-        num_workers=FINETUNE_CONFIG["num_workers"],
+        num_workers=CONFIG["num_workers"],
         pin_memory=True,
     )
-    
-    test_acc, test_per_class, test_confusion = evaluate(model, test_loader, device, class_names)
-    print_metrics(test_acc, test_per_class, class_names, title="Test Set — Fine-tuned Model")
+    test_acc, test_loss, test_per_class, test_confusion = evaluate(model, test_loader, device, class_names, criterion)
+    print_metrics(test_acc, test_per_class, class_names, title="Test Set — 일반 평가")
+    print(f"  Test Loss: {test_loss:.4f}")
 
     # TTA 평가
-    if FINETUNE_CONFIG["tta_transforms"] > 1:
-        print(f"  TTA 평가 중 (augments={FINETUNE_CONFIG['tta_transforms']})...")
-        tta_acc, tta_per_class, _ = evaluate_with_tta(
-            model, test_dataset, device, class_names, FINETUNE_CONFIG["tta_transforms"]
+    if CONFIG["tta_transforms"] > 1:
+        print(f"  TTA 평가 중 (augments={CONFIG['tta_transforms']})...")
+        tta_acc, _, tta_per_class, tta_confusion = evaluate_with_tta(
+            model, test_dataset, device, class_names, CONFIG["tta_transforms"]
         )
-        print_metrics(tta_acc, tta_per_class, class_names, 
-                     title=f"Test Set — TTA (x{FINETUNE_CONFIG['tta_transforms']})")
+        print_metrics(tta_acc, tta_per_class, class_names, title=f"Test Set — TTA (x{CONFIG['tta_transforms']})")
 
-    print(f"\n✅ Fine-tuning 완료! Best Val Acc: {best_val_acc:.4f} | Test Acc: {test_acc:.4f}")
-    print(f"   모델: {FINETUNE_CONFIG['model_save_path']}")
+    # Confusion Matrix 출력
+    print("  Confusion Matrix (rows=predicted, cols=actual):")
+    header = "          " + " ".join(f"{n[:6]:>6}" for n in class_names)
+    print(header)
+    for i, name in enumerate(class_names):
+        row = " ".join(f"{test_confusion[i, j].item():>6}" for j in range(num_classes))
+        print(f"  {name[:8]:>8}  {row}")
+
+    print(f"\n✅ 학습 완료! Best Val Acc: {best_val_acc:.4f} | Test Acc: {test_acc:.4f}")
+    print(f"   모델: {CONFIG['model_save_path']}")
+    print(f"   메타: {CONFIG['model_save_path'].with_suffix('.json')}")
 
 
 if __name__ == "__main__":

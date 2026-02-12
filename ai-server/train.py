@@ -20,15 +20,18 @@ import pandas as pd
 load_dotenv()
 
 # ===== 설정 =====
-DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_v4"
+DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_1"
 CONFIG = {
-    # ── 데이터 경로 (train/val/test 폴더가 이미 분리되어 있음) ──
     "train_dir": DATA_ROOT / "train",
     "val_dir":   DATA_ROOT / "val",
     "test_dir":  DATA_ROOT / "test",
     # ── 모델 저장 ──
-    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef_v3.pth",
-    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_beef_v3",
+    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v1.pth",
+    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_beef_100-v1",
+    "history_path": Path(__file__).parent / "models" / "training_history.json",  # 학습 히스토리
+    # ── 파인튜닝 설정 ──
+    "finetune_from": None,         # 파인튜닝할 기존 모델 경로 (None이면 처음부터)
+    "freeze_backbone_epochs": 0,   # 초기 N 에폭 동안 backbone 동결 (0=동결 안함)
     # ── 학습 하이퍼파라미터 ──
     "num_epochs": 30,
     "batch_size": 32,
@@ -229,16 +232,25 @@ class WarmupCosineScheduler:
 
 
 # ===== 평가 함수 =====
-def evaluate(model, loader, device, class_names):
-    """Validation/Test 세트 평가 — accuracy + per-class precision/recall/F1."""
+def evaluate(model, loader, device, class_names, criterion=None):
+    """Validation/Test 세트 평가 — accuracy + loss + per-class precision/recall/F1."""
     model.eval()
     num_classes = len(class_names)
     confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)  # [pred, true]
+    total_loss = 0.0
+    total_samples = 0
 
     with torch.no_grad():
         for inputs, labels in loader:
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = model(inputs)
+            
+            # Loss 계산 (criterion이 주어진 경우)
+            if criterion is not None:
+                loss = criterion(outputs, labels)
+                total_loss += loss.item() * inputs.size(0)
+                total_samples += inputs.size(0)
+            
             preds = outputs.argmax(dim=1)
             for p, t in zip(preds.cpu(), labels.cpu()):
                 confusion[p, t] += 1
@@ -247,6 +259,9 @@ def evaluate(model, loader, device, class_names):
     total = confusion.sum().item()
     correct = confusion.diag().sum().item()
     accuracy = correct / total if total > 0 else 0.0
+    
+    # Average loss
+    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
 
     # Per-class metrics
     per_class = {}
@@ -259,7 +274,7 @@ def evaluate(model, loader, device, class_names):
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
         per_class[name] = {"precision": precision, "recall": recall, "f1": f1}
 
-    return accuracy, per_class, confusion
+    return accuracy, avg_loss, per_class, confusion
 
 
 def evaluate_with_tta(model, dataset_raw, device, class_names, num_augments=5):
@@ -299,7 +314,7 @@ def evaluate_with_tta(model, dataset_raw, device, class_names, num_augments=5):
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
         per_class[name] = {"precision": precision, "recall": recall, "f1": f1}
 
-    return accuracy, per_class, confusion
+    return accuracy, 0.0, per_class, confusion  # TTA는 loss 반환 안함
 
 
 def print_metrics(accuracy, per_class, class_names, title="Evaluation"):
@@ -465,6 +480,20 @@ def main():
 
     # 모델
     model = create_model_b2(num_classes, pretrained_path=pretrained_path).to(device)
+    
+    # 파인튜닝: 기존 학습된 모델에서 이어서 학습
+    if CONFIG["finetune_from"] and Path(CONFIG["finetune_from"]).exists():
+        finetune_path = Path(CONFIG["finetune_from"])
+        state = torch.load(finetune_path, map_location=device, weights_only=True)
+        model.load_state_dict(state)
+        print(f"  ✓ 파인튜닝 모델 로드: {finetune_path.name}")
+        
+        # 메타데이터에서 이전 성능 확인
+        meta_path = finetune_path.with_suffix(".json")
+        if meta_path.exists():
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            print(f"    이전 성능: Val Acc {meta.get('val_acc', 'N/A'):.4f} (Epoch {meta.get('epoch', 'N/A')})")
 
     # 차등 학습률: Backbone 느리게, Head 빠르게
     optimizer = optim.AdamW([
@@ -477,7 +506,21 @@ def main():
     early_stopping = EarlyStopping(patience=CONFIG["patience"])
 
     best_val_acc = 0.0
+    best_val_loss = float('inf')
     CONFIG["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
+    
+    # 학습 히스토리 저장용
+    history = {
+        "config": {
+            "model_save_path": str(CONFIG["model_save_path"]),
+            "finetune_from": str(CONFIG["finetune_from"]) if CONFIG["finetune_from"] else None,
+            "num_epochs": CONFIG["num_epochs"],
+            "batch_size": CONFIG["batch_size"],
+            "learning_rate": CONFIG["learning_rate"],
+            "head_learning_rate": CONFIG["head_learning_rate"],
+        },
+        "epochs": []
+    }
 
     print(f"\n  학습 시작: {CONFIG['num_epochs']} epochs, batch={CONFIG['batch_size']}, "
           f"warmup={CONFIG['warmup_epochs']}, patience={CONFIG['patience']}")
@@ -511,8 +554,8 @@ def main():
                               + (1 - lam) * (outputs.argmax(1) == labels_b).float().sum()).item()
             train_total += inputs.size(0)
 
-        # === Validation ===
-        val_acc, val_per_class, _ = evaluate(model, val_loader, device, class_names)
+        # === Validation (with loss) ===
+        val_acc, val_loss, val_per_class, _ = evaluate(model, val_loader, device, class_names, criterion)
 
         scheduler.step()
         elapsed = time.time() - epoch_start
@@ -522,14 +565,27 @@ def main():
 
         print(f"  Epoch [{epoch+1:>3}/{CONFIG['num_epochs']}]  "
               f"Train Loss: {t_loss:.4f}  Train Acc: {t_acc:.4f}  |  "
-              f"Val Acc: {val_acc:.4f}  |  "
+              f"Val Loss: {val_loss:.4f}  Val Acc: {val_acc:.4f}  |  "
               f"LR: {lrs[0]:.2e}/{lrs[1]:.2e}  |  {elapsed:.1f}s")
+        
+        # 히스토리 기록
+        history["epochs"].append({
+            "epoch": epoch + 1,
+            "train_loss": round(t_loss, 4),
+            "train_acc": round(t_acc, 4),
+            "val_loss": round(val_loss, 4),
+            "val_acc": round(val_acc, 4),
+            "lr_backbone": lrs[0],
+            "lr_head": lrs[1],
+            "elapsed": round(elapsed, 1)
+        })
 
-        # Best 모델 저장
+        # Best 모델 저장 (Val Acc 기준)
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_val_loss = val_loss
             save_checkpoint(model, class_to_idx, epoch + 1, val_acc, CONFIG["model_save_path"])
-            print(f"  ⭐ Best Model Updated! (Val Acc: {val_acc:.4f})")
+            print(f"  ⭐ Best Model Updated! (Val Acc: {val_acc:.4f}, Val Loss: {val_loss:.4f})")
 
         # 주기적 체크포인트 (10 에폭마다)
         if (epoch + 1) % 10 == 0:
@@ -540,6 +596,13 @@ def main():
         if early_stopping(val_acc):
             print(f"  → {epoch+1} epoch에서 학습 종료 (Early Stopping)")
             break
+    
+    # 학습 히스토리 저장
+    history["best_val_acc"] = best_val_acc
+    history["best_val_loss"] = best_val_loss
+    with open(CONFIG["history_path"], "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+    print(f"  📊 학습 히스토리 저장: {CONFIG['history_path'].name}")
 
     # ────────────────────────────────────────────────
     # [Phase 3] Test 세트 최종 평가
@@ -559,13 +622,14 @@ def main():
         num_workers=CONFIG["num_workers"],
         pin_memory=True,
     )
-    test_acc, test_per_class, test_confusion = evaluate(model, test_loader, device, class_names)
+    test_acc, test_loss, test_per_class, test_confusion = evaluate(model, test_loader, device, class_names, criterion)
     print_metrics(test_acc, test_per_class, class_names, title="Test Set — 일반 평가")
+    print(f"  Test Loss: {test_loss:.4f}")
 
     # TTA 평가
     if CONFIG["tta_transforms"] > 1:
         print(f"  TTA 평가 중 (augments={CONFIG['tta_transforms']})...")
-        tta_acc, tta_per_class, tta_confusion = evaluate_with_tta(
+        tta_acc, _, tta_per_class, tta_confusion = evaluate_with_tta(
             model, test_dataset, device, class_names, CONFIG["tta_transforms"]
         )
         print_metrics(tta_acc, tta_per_class, class_names, title=f"Test Set — TTA (x{CONFIG['tta_transforms']})")
