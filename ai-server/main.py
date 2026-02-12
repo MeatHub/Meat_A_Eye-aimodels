@@ -64,7 +64,7 @@ async def analyze_meat(
 
     Args:
         file: 업로드된 이미지 파일
-        mode: "beef" (소 10부위) | "pork" (돼지 7부위) | "ocr" (이력번호 추출)
+        mode: "beef" (소 9부위) | "pork" (돼지 7부위) | "ocr" (이력번호 추출)
 
     Returns:
         beef/pork: class_name, confidence, heatmap_image
@@ -81,7 +81,7 @@ async def analyze_meat(
     contents = await file.read()
     processed_img = process_web_image(contents)
 
-    # ----- 소 버전 (beef): EfficientNet-B2 소 10부위 -----
+    # ----- 소 버전 (beef): EfficientNet-B2 소 9부위 -----
     if mode == "beef":
         try:
             engine = get_predict_engine()
@@ -112,7 +112,6 @@ async def analyze_meat(
                     "Beef_Sirloin": "Pork_Loin",
                     "Beef_Chuck": "Pork_Neck",
                     "Beef_Round": "Pork_Ham",
-                    "Beef_BottomRound": "Pork_Ham",
                     "Beef_Brisket": "Pork_Belly",
                     "Beef_Shank": "Pork_Ham",
                     "Beef_Rib": "Pork_Ribs",

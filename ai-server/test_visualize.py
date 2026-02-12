@@ -10,11 +10,13 @@ from tqdm import tqdm
 
 # 1. 설정
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\ai-server\models\b2_imagenet_beef_100-v1.pth"
-TEST_IMAGE_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data\train_dataset_1\test"  # 부위별 서브폴더 구조
-RESULT_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\test_results"
+MODEL_PATH = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\ai-server\models\b2_imagenet_beef_100-v3.pth"
+TEST_IMAGE_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data\train_dataset_0\test"  # 부위별 서브폴더 구조
+RESULT_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\test_results_v0"
 
-CLASS_NAMES = ['Beef_BottomRound', 'Beef_Brisket', 'Beef_Chuck', 'Beef_Rib', 'Beef_Ribeye', 'Beef_Round', 'Beef_Shank', 'Beef_Shoulder', 'Beef_Sirloin', 'Beef_Tenderloin']
+CLASS_NAMES = ['Beef_Brisket', 'Beef_Chuck', 'Beef_Rib', 'Beef_Ribeye', 'Beef_Round', 'Beef_Shank', 'Beef_Shoulder', 'Beef_Sirloin', 'Beef_Tenderloin']
+# 10클래스 모델용 병합 매핑 (9클래스 모델에서는 사용하지 않음)
+CLASS_MERGE_MAP = {"Beef_BottomRound": "Beef_Round"}
 IMAGE_SIZE = 260
 
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -24,12 +26,14 @@ def collect_test_images(base_dir):
     """부위별 서브폴더에서 모든 이미지 수집 (경로, 정답 클래스)"""
     images = []
     for class_name in CLASS_NAMES:
+        # Beef_BottomRound 폴더도 수집하되 정답은 Beef_Round로 병합
+        mapped_name = CLASS_MERGE_MAP.get(class_name, class_name)
         class_dir = os.path.join(base_dir, class_name)
         if not os.path.exists(class_dir):
             continue
         for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.webp']:
             for img_path in glob.glob(os.path.join(class_dir, ext)):
-                images.append((img_path, class_name))
+                images.append((img_path, mapped_name))
     return images
 
 # Grad-CAM 클래스 (B2 대응)
@@ -106,9 +110,16 @@ def run_visual_test():
         with torch.set_grad_enabled(True):
             output = model(input_tensor)
             prob = torch.nn.functional.softmax(output, dim=1)
+            
+            # 10클래스 모델일 때만 설도→우둔 확률 병합
+            if len(CLASS_NAMES) == 10:
+                prob[0, 5] += prob[0, 0]  # Beef_Round += Beef_BottomRound
+                prob[0, 0] = 0
+            
             conf, pred = torch.max(prob, 1)
             class_idx = pred.item()
             pred_label = CLASS_NAMES[class_idx]
+            pred_label = CLASS_MERGE_MAP.get(pred_label, pred_label)  # 병합 매핑
             confidence = conf.item()
 
         # 정확도 계산

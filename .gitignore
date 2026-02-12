@@ -83,3 +83,9 @@ logs/
 
 data_cleaning/
 models/
+
+**test_results_all/
+**test_results_v0/
+**test_results_v1/
+**test_results_v2/
+**test_results_v3/

@@ -18,14 +18,15 @@ from PIL import Image
 # ── 설정 ──────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_PATH = MODEL_DIR / "vision_b2_imagenet.pth"
-IMAGE_SIZE = 260  # train.py CONFIG와 동일
+IMAGE_SIZE = 260
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 # datasets.ImageFolder는 폴더명을 알파벳 순으로 정렬하여 클래스 인덱스를 부여
-CLASS_NAMES: List[str] = [
-    "Beef_BottomRound",   # 0 — 설도
+# ⚠️ 기존 10클래스 모델 호환용 (재학습 후 9클래스로 변경 필요)
+MODEL_CLASS_NAMES: List[str] = [
+    "Beef_BottomRound",   # 0 — 설도 (→ Beef_Round로 병합)
     "Beef_Brisket",       # 1 — 양지
     "Beef_Chuck",         # 2 — 목심
     "Beef_Rib",           # 3 — 갈비
@@ -36,7 +37,25 @@ CLASS_NAMES: List[str] = [
     "Beef_Sirloin",       # 8 — 채끝
     "Beef_Tenderloin",    # 9 — 안심
 ]
-NUM_CLASSES = len(CLASS_NAMES)
+NUM_CLASSES = len(MODEL_CLASS_NAMES)
+
+# 병합 후 실제 사용하는 9클래스 (설도+우둔 → Beef_Round)
+CLASS_NAMES: List[str] = [
+    "Beef_Brisket",       # 양지
+    "Beef_Chuck",         # 목심
+    "Beef_Rib",           # 갈비
+    "Beef_Ribeye",        # 등심
+    "Beef_Round",         # 우둔 (설도 병합)
+    "Beef_Shank",         # 사태
+    "Beef_Shoulder",      # 앞다리
+    "Beef_Sirloin",       # 채끝
+    "Beef_Tenderloin",    # 안심
+]
+
+# 병합 매핑 (기존 10클래스 모델 호환)
+CLASS_MERGE_MAP = {
+    "Beef_BottomRound": "Beef_Round",  # 설도 → 우둔 병합
+}
 
 
 def _build_model() -> nn.Module:
@@ -139,9 +158,15 @@ class PredictEngine:
         with torch.no_grad():
             output = self.model(input_tensor)
             probs = F.softmax(output, dim=1)
+            
+            # 설도(idx=0) 확률을 우둔(idx=5)에 합산 (클래스 병합)
+            probs[0, 5] += probs[0, 0]   # Beef_Round += Beef_BottomRound
+            probs[0, 0] = 0               # Beef_BottomRound 제거
+            
             confidence, pred_idx = probs.max(dim=1)
 
-        class_name = CLASS_NAMES[pred_idx.item()]
+        class_name = MODEL_CLASS_NAMES[pred_idx.item()]
+        class_name = CLASS_MERGE_MAP.get(class_name, class_name)  # 병합 매핑 적용
         conf_value = confidence.item()
 
         try:

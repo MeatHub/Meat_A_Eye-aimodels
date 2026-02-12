@@ -20,23 +20,23 @@ import pandas as pd
 load_dotenv()
 
 # ===== 설정 =====
-DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_1"
+DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_3"
 CONFIG = {
-    "train_dir": DATA_ROOT.parent / "train_dataset_2" / "train",
-    "val_dir":   DATA_ROOT.parent / "train_dataset_2" / "val",
-    "test_dir":  DATA_ROOT.parent / "train_dataset_2" / "test",
+    "train_dir": DATA_ROOT.parent / "train_dataset_3" / "train",
+    "val_dir":   DATA_ROOT.parent / "train_dataset_3" / "val",
+    "test_dir":  DATA_ROOT.parent / "train_dataset_3" / "test",
     
     # ── 모델 저장 ──
-    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v2.pth",
+    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v3.pth",
 
-    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_beef_100-v2",
+    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_beef_100-v3",
 
     "history_path": Path(__file__).parent / "models" / "training_history.json",  # 학습 히스토리
 
     # ── 파인튜닝 설정(기존 모델) ──
-    "finetune_from": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v1.pth",
+    "finetune_from": Path(__file__).parent / "models" / "b2_imagenet_beef_100-v2.pth",
 
-    "freeze_backbone_epochs": 0,   # 초기 N 에폭 동안 backbone 동결 (0=동결 안함)
+    "freeze_backbone_epochs": 0,   # 초기 N 에폭 동안 backbone 동결 
 
     # ── 학습 하이퍼파라미터 ──
     "num_epochs": 30,
