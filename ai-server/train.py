@@ -20,17 +20,17 @@ import pandas as pd
 load_dotenv()
 
 # ===== 설정 =====
-DATA_ROOT = Path(__file__).parent.parent / "data" / "pork_dataset_2"
+DATA_ROOT = Path(__file__).parent.parent / "data" / "train_dataset_4"
 CONFIG = {
     "train_dir": DATA_ROOT / "train",
     "val_dir":   DATA_ROOT / "val",
     "test_dir":  DATA_ROOT / "test",
     # ── 모델 저장 ──
-    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_pork_100-v2.pth",
-    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_pork_100-v2",
+    "model_save_path": Path(__file__).parent / "models" / "b2_imagenet_pork_100-v4.pth",
+    "checkpoint_dir":  Path(__file__).parent / "models" / "checkpoints_pork_100-v4",
     "history_path": Path(__file__).parent / "models" / "training_history.json",  # 학습 히스토리
     # ── 파인튜닝 설정 ──
-    "finetune_from": "b2_imagenet_pork_100-v1.pth",  # 파인튜닝할 기존 모델 경로 (None이면 처음부터)
+    "finetune_from": "b2_imagenet_pork_100-v3.pth",  # 파인튜닝할 기존 모델 경로 (None이면 처음부터)
     "freeze_backbone_epochs": 0,   # 초기 N 에폭 동안 backbone 동결 (0=동결 안함)
     # ── 학습 하이퍼파라미터 ──
     "num_epochs": 20,

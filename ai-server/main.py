@@ -9,6 +9,7 @@ from web_processor import process_web_image
 from vision_engine import predict_part
 from ocr_engine import extract_text
 from predict_b2 import get_predict_engine
+from predict_pork import get_pork_predict_engine
 
 app = FastAPI(title="Meat-A-Eye AI Web Server")
 
@@ -97,40 +98,21 @@ async def analyze_meat(
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"추론 실패: {str(e)}")
 
-    # ----- 돼지 버전 (pork): 학습 중 플레이스홀더 -----
+    # ----- 돼지 버전 (pork): EfficientNet-B2 돼지 7부위 -----
     if mode == "pork":
-        # 돼지 전용 모델 학습 중: 플레이스홀더 응답 (백엔드 연동 유지)
         try:
-            engine = get_predict_engine()
-            result = engine.predict(contents)
-            # predict_b2는 소만 지원 → 부위명을 Pork_ prefix로 매핑 시도 (임시)
-            class_name = result["class_name"]
-            if class_name.startswith("Beef_"):
-                pork_map = {
-                    "Beef_Tenderloin": "Pork_Tenderloin",
-                    "Beef_Ribeye": "Pork_Loin",
-                    "Beef_Sirloin": "Pork_Loin",
-                    "Beef_Chuck": "Pork_Neck",
-                    "Beef_Round": "Pork_Ham",
-                    "Beef_Brisket": "Pork_Belly",
-                    "Beef_Shank": "Pork_Ham",
-                    "Beef_Rib": "Pork_Ribs",
-                    "Beef_Shoulder": "Pork_PicnicShoulder",
-                }
-                class_name = pork_map.get(class_name, "Pork_Belly")
+            pork_engine = get_pork_predict_engine()
+            result = pork_engine.predict(contents)
             return {
                 "status": "success",
-                "class_name": class_name,
-                "confidence": result["confidence"] * 0.8,  # 임시 낮춤
+                "class_name": result["class_name"],
+                "confidence": result["confidence"],
                 "heatmap_image": result["heatmap_image"],
             }
-        except Exception:
-            return {
-                "status": "success",
-                "class_name": "Pork_Belly",
-                "confidence": 0.01,
-                "heatmap_image": None,
-            }
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=503, detail=f"돼지 모델 로드 실패: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"돼지 추론 실패: {str(e)}")
 
     # ----- OCR 버전: 이력번호 추출 -----
     if mode == "ocr":

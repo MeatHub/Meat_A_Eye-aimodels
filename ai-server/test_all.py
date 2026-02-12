@@ -13,7 +13,7 @@ import glob
 
 # ===== 설정 =====
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\ai-server\models\b2_imagenet_beef_100-v3.pth"
+MODEL_PATH = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\ai-server\models\b2_imagenet_beef_100-v4.pth"
 DATA_ROOT = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\data"
 RESULT_DIR = r"C:\Pyg\Projects\meathub\Meat_A_Eye-aimodels\test_results_all"
 

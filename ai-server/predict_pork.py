@@ -1,6 +1,6 @@
 """
-EfficientNet-B2 기반 소고기 부위 분류 + Grad-CAM 히트맵 엔진.
-train.py에서 학습한 모델(vision_b2_imagenet.pth)을 로드하여 추론.
+EfficientNet-B2 기반 돼지 부위 분류 + Grad-CAM 히트맵 엔진.
+소 predict_b2.py와 동일 구조, 돼지 7부위 전용 모델 사용.
 """
 import io
 import base64
@@ -17,29 +17,27 @@ from PIL import Image
 
 # ── 설정 ──────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).resolve().parent / "models"
-MODEL_PATH = MODEL_DIR / "b2_imagenet_beef_100-v4.pth"
+MODEL_PATH = MODEL_DIR / "b2_imagenet_pork_50-v4.pth"
 IMAGE_SIZE = 260
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# 소 9부위 (v4 모델 — 9클래스 직접 출력)
+# 돼지 7부위 (알파벳순 — ImageFolder 기준)
 CLASS_NAMES: List[str] = [
-    "Beef_Brisket",       # 0 — 양지
-    "Beef_Chuck",         # 1 — 목심
-    "Beef_Rib",           # 2 — 갈비
-    "Beef_Ribeye",        # 3 — 등심
-    "Beef_Round",         # 4 — 우둔
-    "Beef_Shank",         # 5 — 사태
-    "Beef_Shoulder",      # 6 — 앞다리
-    "Beef_Sirloin",       # 7 — 채끝
-    "Beef_Tenderloin",    # 8 — 안심
+    "Pork_Belly",           # 0 — 삼겹살
+    "Pork_Ham",             # 1 — 뒷다리
+    "Pork_Loin",            # 2 — 등심
+    "Pork_Neck",            # 3 — 목살
+    "Pork_PicnicShoulder",  # 4 — 앞다리
+    "Pork_Ribs",            # 5 — 갈비
+    "Pork_Tenderloin",      # 6 — 안심
 ]
 NUM_CLASSES = len(CLASS_NAMES)
 
 
 def _build_model() -> nn.Module:
-    """train.py의 create_model_b2와 동일 구조로 모델 생성."""
+    """EfficientNet-B2 돼지 7부위 분류 모델 생성."""
     model = models.efficientnet_b2(weights=None)
     model.classifier = nn.Sequential(
         nn.Dropout(p=0.4, inplace=True),
@@ -90,8 +88,8 @@ class GradCAM:
         return (cam * 255).astype(np.uint8)
 
 
-class PredictEngine:
-    """싱글톤 추론 엔진."""
+class PorkPredictEngine:
+    """돼지 부위 싱글톤 추론 엔진."""
 
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -104,12 +102,12 @@ class PredictEngine:
     def _load_weights(self):
         if not MODEL_PATH.exists():
             raise FileNotFoundError(
-                f"모델 파일을 찾을 수 없습니다: {MODEL_PATH}\n"
-                f"train.py를 먼저 실행하여 모델을 학습해 주세요."
+                f"돼지 모델 파일을 찾을 수 없습니다: {MODEL_PATH}\n"
+                f"돼지 부위 모델을 먼저 학습해 주세요."
             )
         state_dict = torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
         self.model.load_state_dict(state_dict)
-        print(f"✓ 모델 로드 완료: {MODEL_PATH.name} ({NUM_CLASSES} classes)")
+        print(f"✓ 돼지 모델 로드 완료: {MODEL_PATH.name} ({NUM_CLASSES} classes)")
 
     def _preprocess(self, contents: bytes) -> tuple:
         pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -158,12 +156,12 @@ class PredictEngine:
         }
 
 
-_engine_instance: Optional[PredictEngine] = None
+_pork_engine_instance: Optional[PorkPredictEngine] = None
 
 
-def get_predict_engine() -> PredictEngine:
-    """싱글톤 PredictEngine 반환. 최초 호출 시 모델 로드."""
-    global _engine_instance
-    if _engine_instance is None:
-        _engine_instance = PredictEngine()
-    return _engine_instance
+def get_pork_predict_engine() -> PorkPredictEngine:
+    """싱글톤 PorkPredictEngine 반환. 최초 호출 시 모델 로드."""
+    global _pork_engine_instance
+    if _pork_engine_instance is None:
+        _pork_engine_instance = PorkPredictEngine()
+    return _pork_engine_instance
