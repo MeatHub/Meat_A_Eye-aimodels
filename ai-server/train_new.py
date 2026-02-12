@@ -13,14 +13,14 @@ import numpy as np
 # 1. 설정 (기존 스타일 유지)
 # ==========================================
 CONFIG = {
-    "train_dir": Path(r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final\train"),
-    "val_dir":   Path(r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final\val"),
-    "test_dir":  Path(r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final\test"),
+    "train_dir": Path(r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\Beef_dataset2\train"),
+    "val_dir":   Path(r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\Beef_dataset2\val"),
+    "test_dir":  Path(r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\Beef_dataset2\test"),
     
     # 원래 쓰시던 경로 형식 그대로!
-    "model_save_path": Path(__file__).parent / "models" / "models_b2" / "meat_vision_b2_dataset.pth",
+    "model_save_path": Path(__file__).parent / "models" / "models_each2" / "meat_vision_b2_beef.pth",
     
-    "num_epochs": 15,        # 6500장이면 15회 정도가 적당합니다.
+    "num_epochs": 10,
     "batch_size": 32,
     "learning_rate": 0.001,
     "image_size": 260,

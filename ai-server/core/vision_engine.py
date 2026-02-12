@@ -1,157 +1,232 @@
 """
-Meat-A-Eye 웹 브라우저 업로드 이미지 기반 부위 추론 엔진
-EfficientNet-B0 기반, 필요시 B2~B3 확장 가능
-목표 추론 속도: 200ms 이내
+Meat-A-Eye EfficientNet-B2 Vision Engine
+17클래스 고기 부위 분류 + Grad-CAM 히트맵
+백엔드 PART_TO_CODES와 17개 영문 클래스명 1:1 대응
 """
+import base64
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision import models
-from typing import Dict, Optional
+from torchvision import models, transforms
+from typing import Dict, List, Optional
 from pathlib import Path
+from PIL import Image
 
-from .web_processor import preprocess_for_model
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    print("[VisionEngine] 경고: opencv 미설치. 히트맵 비활성화")
+
+# ---------------------------------------------------------------------------
+# B2 17클래스 (dataset_final 폴더명 알파벳순 = ImageFolder 순서)
+# ---------------------------------------------------------------------------
+B2_17_CLASSES: List[str] = [
+    "Beef_BottomRound", "Beef_Brisket", "Beef_Chuck", "Beef_Rib",
+    "Beef_Ribeye", "Beef_Round", "Beef_Shank", "Beef_Shoulder",
+    "Beef_Sirloin", "Beef_Tenderloin",
+    "Pork_Belly", "Pork_Ham", "Pork_Loin", "Pork_Neck",
+    "Pork_PicnicShoulder", "Pork_Ribs", "Pork_Tenderloin",
+]
+
+# ---------------------------------------------------------------------------
+# 설정
+# ---------------------------------------------------------------------------
+MODEL_INPUT_SIZE = 260
+CONFIDENCE_THRESHOLD = 0.5
+
+MODEL_DIR = Path(__file__).parent.parent / "models" / "models_b2"
+MODEL_CANDIDATES = [
+    "meat_vision_b2_dataset.pth",   # train_new.py 17클래스 학습 결과 (우선)
+    "meat_vision_b2_new.pth",
+    "meat_vision_b2_hard.pth",
+    "meat_vision_b2_hard_test.pth",
+]
+
+# 추론 전처리 (학습 시 val_transform과 동일)
+_transform = transforms.Compose([
+    transforms.Resize((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+])
 
 
-# 소/돼지 주요 부위 7~10종 클래스 정의
-MEAT_CLASSES = {
-    0: {"name": "삼겹살", "name_en": "pork_belly", "animal": "pork"},
-    1: {"name": "목살", "name_en": "pork_shoulder", "animal": "pork"},
-    2: {"name": "등심", "name_en": "sirloin", "animal": "beef"},
-    3: {"name": "안심", "name_en": "tenderloin", "animal": "beef"},
-    4: {"name": "갈비", "name_en": "ribs", "animal": "beef"},
-    5: {"name": "채끝", "name_en": "striploin", "animal": "beef"},
-    6: {"name": "앞다리", "name_en": "front_leg", "animal": "pork"},
-    7: {"name": "뒷다리", "name_en": "rear_leg", "animal": "pork"},
-    8: {"name": "차돌박이", "name_en": "brisket", "animal": "beef"},
-    9: {"name": "항정살", "name_en": "pork_jowl", "animal": "pork"},
-}
+# ---------------------------------------------------------------------------
+# Grad-CAM
+# ---------------------------------------------------------------------------
+class GradCAM:
+    def __init__(self, model: nn.Module, target_layer: nn.Module):
+        self.model = model
+        self.gradients: Optional[torch.Tensor] = None
+        self.activations: Optional[torch.Tensor] = None
+        target_layer.register_forward_hook(self._save_activation)
+        target_layer.register_full_backward_hook(self._save_gradient)
 
-# 신뢰도 임계값 (75% 미만 시 경고)
-CONFIDENCE_THRESHOLD = 0.75
+    def _save_activation(self, module, inp, out):
+        self.activations = out.detach()
 
-# 모델 경로
-MODEL_PATH = Path(__file__).parent.parent / "models" / "meat_vision_v2.pth"
+    def _save_gradient(self, module, grad_in, grad_out):
+        self.gradients = grad_out[0].detach()
 
 
-class MeatVisionModel:
-    """EfficientNet-B0 기반 고기 부위 분류 모델"""
+# ---------------------------------------------------------------------------
+# 모델 래퍼
+# ---------------------------------------------------------------------------
+class MeatVisionB2:
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.classes: List[str] = []
+        self.model: Optional[nn.Module] = None
+        self.grad_cam: Optional[GradCAM] = None
+        self._load()
 
-    def __init__(self, model_path: Optional[str] = None, device: str = "auto"):
-        """
-        모델 초기화
+    def _find_model_path(self) -> Optional[Path]:
+        for name in MODEL_CANDIDATES:
+            p = MODEL_DIR / name
+            if p.exists():
+                return p
+        return None
 
-        Args:
-            model_path: 학습된 가중치 파일 경로 (.pth)
-            device: 추론 디바이스 ("auto", "cuda", "cpu")
-        """
-        # 디바이스 설정
-        if device == "auto":
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def _load(self):
+        model_path = self._find_model_path()
+
+        if model_path is None:
+            print("[VisionEngine] 경고: B2 모델 파일 없음. pretrained 가중치 사용")
+            self.classes = B2_17_CLASSES
+            model = models.efficientnet_b2(weights=models.EfficientNet_B2_Weights.DEFAULT)
+            model.classifier[1] = nn.Linear(model.classifier[1].in_features, len(self.classes))
+            self.model = model.to(self.device).eval()
+            self.grad_cam = GradCAM(self.model, self.model.features[-1])
+            return
+
+        # 가중치에서 클래스 수 자동 감지
+        try:
+            state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+        except TypeError:
+            state_dict = torch.load(model_path, map_location=self.device)
+
+        num_classes = state_dict["classifier.1.weight"].shape[0]
+        print(f"[VisionEngine] 모델 로드: {model_path.name} ({num_classes}클래스, device={self.device})")
+
+        # 클래스 리스트 결정
+        if num_classes == len(B2_17_CLASSES):
+            self.classes = B2_17_CLASSES
+        elif num_classes <= len(B2_17_CLASSES):
+            self.classes = B2_17_CLASSES[:num_classes]
         else:
-            self.device = torch.device(device)
+            self.classes = [f"class_{i}" for i in range(num_classes)]
 
-        # 모델 구조 생성 (EfficientNet-B0)
-        self.model = models.efficientnet_b0(weights=None)
+        model = models.efficientnet_b2(weights=None)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+        model.load_state_dict(state_dict)
+        self.model = model.to(self.device).eval()
+        self.grad_cam = GradCAM(self.model, self.model.features[-1])
 
-        # 분류 헤드 수정 (클래스 수에 맞게)
-        num_classes = len(MEAT_CLASSES)
-        self.model.classifier[1] = nn.Linear(
-            self.model.classifier[1].in_features,
-            num_classes
-        )
-
-        # 가중치 로드
-        self.model_path = model_path or MODEL_PATH
-        self._load_weights()
-
-        # 평가 모드로 전환
-        self.model.to(self.device)
-        self.model.eval()
-
-    def _load_weights(self):
-        """학습된 가중치 로드"""
-        if Path(self.model_path).exists():
-            state_dict = torch.load(self.model_path, map_location=self.device)
-            self.model.load_state_dict(state_dict)
-            print(f"[Vision Engine] 모델 가중치 로드 완료: {self.model_path}")
-        else:
-            print(f"[Vision Engine] 경고: 가중치 파일 없음. 사전학습 모델 사용")
-            # ImageNet 사전학습 가중치로 초기화
-            pretrained = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-            # classifier를 제외한 가중치만 복사
-            state_dict = pretrained.state_dict()
-            # classifier 레이어 제외
-            state_dict = {k: v for k, v in state_dict.items() if 'classifier' not in k}
-            self.model.load_state_dict(state_dict, strict=False)
-
-    @torch.no_grad()
-    def predict(self, img_array: np.ndarray) -> Dict:
+    def predict(self, pil_image: Image.Image, generate_heatmap: bool = True) -> Dict:
         """
-        이미지에서 고기 부위 예측
-
-        Args:
-            img_array: 전처리된 이미지 numpy 배열
+        고기 부위 예측 + (선택) Grad-CAM 히트맵
 
         Returns:
-            예측 결과 딕셔너리
+            {status, class_name, confidence, heatmap_image}
         """
-        # 모델 입력용 전처리
-        processed = preprocess_for_model(img_array)
+        input_tensor = _transform(pil_image).unsqueeze(0).to(self.device)
 
-        # numpy -> torch tensor 변환 (B, C, H, W)
-        tensor = torch.from_numpy(processed).permute(2, 0, 1).unsqueeze(0).float()
-        tensor = tensor.to(self.device)
+        if generate_heatmap and self.grad_cam and CV2_AVAILABLE:
+            # Grad-CAM: gradient 필요하므로 no_grad 사용 안 함
+            self.model.zero_grad()
+            output = self.model(input_tensor)
+            probs = torch.softmax(output, dim=1)
+            conf, idx = torch.max(probs, dim=1)
+            confidence = conf.item()
+            class_idx = idx.item()
 
-        # 추론
-        outputs = self.model(tensor)
-        probabilities = torch.softmax(outputs, dim=1)
+            # backward로 Grad-CAM 생성
+            output[0, class_idx].backward()
 
-        # 최고 확률 클래스
-        score, predicted_idx = torch.max(probabilities, dim=1)
-        score = score.item()
-        predicted_idx = predicted_idx.item()
+            weights = self.grad_cam.gradients.mean(dim=(2, 3), keepdim=True)
+            cam = (weights * self.grad_cam.activations).sum(dim=1).squeeze().cpu().numpy()
+            cam = np.maximum(cam, 0)
+            if cam.max() > 0:
+                cam = cam / cam.max()
 
-        # 결과 구성
-        meat_info = MEAT_CLASSES.get(predicted_idx, {"name": "알 수 없음", "name_en": "unknown", "animal": "unknown"})
+            heatmap_b64 = self._heatmap_to_base64(pil_image, cam)
+        else:
+            with torch.no_grad():
+                output = self.model(input_tensor)
+                probs = torch.softmax(output, dim=1)
+                conf, idx = torch.max(probs, dim=1)
+                confidence = conf.item()
+                class_idx = idx.item()
+            heatmap_b64 = None
+
+        class_name = self.classes[class_idx] if class_idx < len(self.classes) else "unknown"
 
         return {
-            "label": meat_info["name"],
-            "label_en": meat_info["name_en"],
-            "animal": meat_info["animal"],
-            "class_idx": predicted_idx,
-            "score": score,
-            "is_valid": score >= CONFIDENCE_THRESHOLD
+            "status": "success",
+            "class_name": class_name,
+            "confidence": round(confidence, 4),
+            "heatmap_image": heatmap_b64,
         }
 
+    def _heatmap_to_base64(self, pil_image: Image.Image, heatmap: np.ndarray) -> Optional[str]:
+        try:
+            img_resized = pil_image.resize((MODEL_INPUT_SIZE, MODEL_INPUT_SIZE))
+            img_arr = np.array(img_resized)[:, :, ::-1]  # RGB → BGR
 
-# 싱글톤 모델 인스턴스 (서버 시작 시 1회 로드)
-_model_instance: Optional[MeatVisionModel] = None
+            heatmap_resized = cv2.resize(heatmap, (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE))
+            heatmap_uint8 = np.uint8(255 * heatmap_resized)
+            heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
+
+            blended = cv2.addWeighted(img_arr, 0.6, heatmap_color, 0.4, 0)
+
+            _, buffer = cv2.imencode(".jpg", blended, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return base64.b64encode(buffer).decode("utf-8")
+        except Exception as e:
+            print(f"[VisionEngine] 히트맵 base64 변환 실패: {e}")
+            return None
 
 
-def get_model() -> MeatVisionModel:
-    """모델 싱글톤 인스턴스 반환"""
-    global _model_instance
-    if _model_instance is None:
-        _model_instance = MeatVisionModel()
-    return _model_instance
+# ---------------------------------------------------------------------------
+# 싱글톤 & API 함수
+# ---------------------------------------------------------------------------
+_instance: Optional[MeatVisionB2] = None
+
+
+def get_model() -> MeatVisionB2:
+    global _instance
+    if _instance is None:
+        _instance = MeatVisionB2()
+    return _instance
 
 
 def predict_part(img_array: np.ndarray) -> Dict:
     """
-    고기 부위 판별 (API 엔드포인트용)
-
-    Args:
-        img_array: process_web_image로 전처리된 이미지
+    기존 /ai/analyze vision 호환용
 
     Returns:
-        {
-            "label": "삼겹살",
-            "label_en": "pork_belly",
-            "animal": "pork",
-            "score": 0.92,
-            "is_valid": True
-        }
+        {label, label_en, animal, score, is_valid}
     """
+    pil_image = Image.fromarray(img_array)
     model = get_model()
-    return model.predict(img_array)
+    result = model.predict(pil_image, generate_heatmap=False)
+    backend_name = result["class_name"]
+    return {
+        "label": backend_name,
+        "label_en": backend_name,
+        "animal": "beef" if backend_name.startswith("Beef") else "pork",
+        "score": result["confidence"],
+        "is_valid": result["confidence"] >= CONFIDENCE_THRESHOLD,
+    }
+
+
+def predict_for_api(img_array: np.ndarray) -> Dict:
+    """
+    POST /predict 엔드포인트용
+
+    Returns:
+        {status, class_name, confidence, heatmap_image}
+    """
+    pil_image = Image.fromarray(img_array)
+    model = get_model()
+    return model.predict(pil_image, generate_heatmap=True)

@@ -9,7 +9,7 @@ from tqdm import tqdm
 # 모든 부위가 폴더별로 모여있는 곳
 MASTER_DATA_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\master_dataset"
 # 최종적으로 학습에 사용될 분할 폴더
-FINAL_SPLIT_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final"
+FINAL_SPLIT_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\Beef_dataset2"
 
 # 목표 비율 (8:1:1)
 RATIOS = {'train': 0.8, 'val': 0.1, 'test': 0.1}

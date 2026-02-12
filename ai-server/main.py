@@ -1,20 +1,20 @@
-# main.py (Web-Optimized Version)
-# Meat-A-Eye AI Web Server
-# FastAPI 메인 서버 (Web API 엔드포인트)
+# main.py
+# Meat-A-Eye AI Server (백엔드 연동용)
+# POST /predict  → 고기 부위 판별 (백엔드 vision 모드)
+# POST /ai/analyze → 기존 호환 (vision + ocr)
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # 웹 필수: CORS 설정
+from fastapi.middleware.cors import CORSMiddleware
 
 from core.web_processor import process_web_image
-from core.vision_engine import predict_part
+from core.vision_engine import predict_part, predict_for_api
 from core.ocr_engine import extract_text
 
-app = FastAPI(title="Meat-A-Eye AI Web Server")
+app = FastAPI(title="Meat-A-Eye AI Server")
 
-# 웹 프론트엔드(Next.js)와의 통신을 위한 CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 개발 단계에서는 전체 허용, 운영 시 도메인 제한
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,80 +24,85 @@ app.add_middleware(
 @app.get("/")
 async def root():
     """서버 상태 확인"""
-    return {"status": "running", "service": "Meat-A-Eye AI Server"}
+    return {"status": "running", "service": "Meat-A-Eye AI Server", "port": 8001}
 
 
+# ---------------------------------------------------------------
+# 백엔드 연동 전용 엔드포인트
+# ---------------------------------------------------------------
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    """
+    고기 부위 판별 API (백엔드 vision 모드 전용)
+
+    Request:
+        Content-Type: multipart/form-data
+        필드: file (이미지 파일)
+
+    Response (JSON):
+        성공: {status:"success", class_name, confidence, heatmap_image}
+        실패: {status:"error", message}
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        return {
+            "status": "error",
+            "message": "이미지 파일만 업로드 가능합니다.",
+        }
+
+    try:
+        contents = await file.read()
+        processed_img = process_web_image(contents)
+        result = predict_for_api(processed_img)
+        return result
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"추론 실패: {str(e)}",
+        }
+
+
+# ---------------------------------------------------------------
+# 기존 호환 엔드포인트 (vision + ocr)
+# ---------------------------------------------------------------
 @app.post("/ai/analyze")
 async def analyze_meat(
-    mode: str = Form(...),  # vision 또는 ocr
+    mode: str = Form(...),
     file: UploadFile = File(...)
 ):
     """
-    고기 이미지 분석 API
+    고기 분석 API (vision/ocr 겸용)
 
     Args:
         mode: "vision" (부위 판별) 또는 "ocr" (이력번호 추출)
         file: 업로드된 이미지 파일
-
-    Returns:
-        분석 결과 JSON
     """
-    # 1. 파일 검증 (웹 브라우저 업로드 특성 반영)
-    if not file.content_type.startswith("image/"):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="이미지 파일만 업로드 가능합니다.")
 
     contents = await file.read()
-
-    # 2. 웹 특화 전처리 (다양한 브라우저 포맷 대응 및 리사이징)
-    # 웹 사용자가 올린 고화질 사진을 서버 부하 방지를 위해 최적화함
     processed_img = process_web_image(contents)
 
     if mode == "vision":
-        # 고기 부위 판별
-        result = predict_part(processed_img)
-
-        # 신뢰도 75% 미만 시 상세 가이드 반환
-        if not result['is_valid']:
-            return {
-                "status": "warning",
-                "error_code": "LOW_CONFIDENCE",
-                "message": "이미지가 흐립니다. 다시 업로드해 주세요.",
-                "data": {
-                    "category": result['label'],
-                    "probability": round(result['score'] * 100, 2),
-                    "is_valid": False
-                }
-            }
-
-        return {
-            "status": "success",
-            "data": {
-                "category": result['label'],
-                "category_en": result['label_en'],
-                "animal": result['animal'],
-                "probability": round(result['score'] * 100, 2),
-                "is_valid": result['is_valid']  # 웹 UI에서 '정확도 낮음' 표시용
-            }
-        }
+        result = predict_for_api(processed_img)
+        return result
 
     elif mode == "ocr":
-        # 이력번호 및 텍스트 추출
         ocr_result = extract_text(processed_img)
 
-        if not ocr_result['success']:
+        if not ocr_result["success"]:
             return {
                 "status": "error",
                 "error_code": "OCR_FAILED",
                 "message": "텍스트 추출에 실패했습니다.",
-                "detail": ocr_result.get('error')
+                "detail": ocr_result.get("error"),
             }
 
         return {
             "status": "success",
             "data": {
-                "trace_number": ocr_result['text'],
-                "raw_output": ocr_result['raw']
-            }
+                "trace_number": ocr_result["text"],
+                "raw_output": ocr_result["raw"],
+            },
         }
 
     return {"status": "error", "message": "Invalid mode. Use 'vision' or 'ocr'."}
@@ -105,4 +110,4 @@ async def analyze_meat(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

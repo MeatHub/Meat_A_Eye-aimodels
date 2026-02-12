@@ -11,11 +11,11 @@ from tqdm import tqdm
 # ==========================================
 # 1. 경로 설정 (팀장님 환경)
 # ==========================================
-RAW_INPUT_FOLDER = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\raw_images\Pork_Ribs"
+RAW_INPUT_FOLDER = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\raw_images\Beef_Tenderloin"
 MASTER_DATA_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\master_dataset"
 FINAL_SPLIT_ROOT = r"D:\ahy\Projects\meathub\Meat_A_Eye-aimodels\data\dataset_final"
 
-PREFIX = "Pork_Ribs"
+PREFIX = "Beef_Tenderloin"
 # 목표 비율 (8:1:1)
 RATIOS = {'train': 0.8, 'val': 0.1, 'test': 0.1}
 

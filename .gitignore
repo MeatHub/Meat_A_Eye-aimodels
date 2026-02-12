@@ -10,8 +10,10 @@ __pycache__/
 
 test_results/
 test_results_hf/
-test_results1/
-test_results2/
+imagenet_results/
+pork_results/
+beef_results/
+beef_results2/
 
 .gitignore
 
