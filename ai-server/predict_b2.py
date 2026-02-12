@@ -17,7 +17,7 @@ from PIL import Image
 
 # ── 설정 ──────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).resolve().parent / "models"
-MODEL_PATH = MODEL_DIR / "vision_b2_imagenet.pth"
+MODEL_PATH = MODEL_DIR / "b2_imagenet_beef_100-v3.pth"
 IMAGE_SIZE = 260
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]

@@ -19,9 +19,9 @@ from collections import Counter
 # ===== 설정 =====
 DATA_ROOT = Path(__file__).parent.parent.parent / "data"
 CONFIG = {
-    "train_dir": DATA_ROOT / "train_dataset_3" / "train",
-    "val_dir":   DATA_ROOT / "train_dataset_3" / "val",
-    "test_dir":  DATA_ROOT / "train_dataset_3" / "test",
+    "train_dir": DATA_ROOT / "train_dataset_1" / "train",
+    "val_dir":   DATA_ROOT / "train_dataset_1" / "val",
+    "test_dir":  DATA_ROOT / "train_dataset_1" / "test",
 
     # ── 모델 저장 ──
     "model_save_path": Path(__file__).parent.parent / "models" / "v2l_beef_100-v1.pth",
@@ -292,7 +292,7 @@ def main():
     print(f"Device: {device}")
     if device.type == "cuda":
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
-        print(f"  VRAM: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB")
+        print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
 
     print("\n[EfficientNetV2-L] 소고기 부위 분류 Fine-tuning")
     print(f"  ⚠ V2-L은 약 118M 파라미터 — VRAM 8GB 이상 권장 (batch_size={CONFIG['batch_size']})")
