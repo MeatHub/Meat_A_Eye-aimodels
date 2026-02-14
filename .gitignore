@@ -91,3 +91,8 @@ models/
 **test_results_v3/
 
 **pork_test_results_all/
+
+/models/
+**/convnext_l/
+**/efficientnetv2_l/
+**/swin_transformer/
