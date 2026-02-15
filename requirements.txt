@@ -1,26 +1,40 @@
-# Deep Learning (CUDA 12.6 Optimized)
+# ==============================
+# MeatHub AI Server - Requirements
+# ==============================
+# 설치: pip install -r requirements.txt
+
+# ── Deep Learning (CUDA 12.6) ────────────────────────────
 --index-url https://download.pytorch.org/whl/cu126
 torch==2.6.0+cu126
 torchvision==0.21.0+cu126
-torchaudio==2.6.0+cu126
 efficientnet_pytorch==0.7.1
 
-# Image & AI
-albumentations==2.0.8
-opencv-python>=4.13.0.80
-pillow>=12.1.0
-numpy>=2.4.1
-matplotlib
-seaborn
-scikit-learn
+# ── OCR ──────────────────────────────────────────────────
 easyocr==1.7.2
 
-# Web & Utils
-fastapi==0.128.2
-uvicorn[standard]==0.40.0
-python-multipart==0.0.21
-python-dotenv==1.2.1
-datasets>=3.1.0
-huggingface-hub>=0.36.0
-PyYAML==6.0.2
-ipykernel
+# ── PaddlePaddle GPU (OCR 인식 모델) ─────────────────────
+# ⚠️ PyTorch와 DLL 충돌 가능 → requirements.txt에 넣지 않고 별도 설치
+# ✅ 설치 순서 (반드시 이 순서대로):
+#   1) pip install -r requirements.txt          ← 먼저 PyTorch 설치
+#   2) pip install paddlepaddle-gpu==3.2.2 -i https://www.paddlepaddle.org.cn/packages/nightly/cu126/
+# ⚠️ 전제 조건:
+#   - CUDA 12.6 + cuDNN 9.x 설치 필요 (NVIDIA GPU 필수)
+#   - CPU 전용: pip install paddlepaddle==3.2.2
+# PaddleOCR 소스: git clone https://github.com/PaddlePaddle/PaddleOCR.git ai-server/OCR/PaddleOCR
+
+# ── 이미지 처리 ──────────────────────────────────────────
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+albumentations>=1.3.0
+
+# ── 웹 서버 (FastAPI) ────────────────────────────────────
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# ── 유틸리티 ─────────────────────────────────────────────
+matplotlib
+scikit-learn
+python-dotenv>=1.0.0
+PyYAML>=6.0

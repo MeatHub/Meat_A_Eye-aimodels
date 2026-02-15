@@ -1,98 +1,84 @@
 # ==============================
-# Python Virtual Environment
+# MeatHub AI Models — .gitignore
 # ==============================
-.venv/
+
+# ── Python 가상환경 ──────────────────────────────────────
 venv/
+.venv/
 **/venv/
 **/.venv/
 
-# ==============================
-# Data & Models (대용량 파일)
-# ==============================
-# 데이터셋 (용량 큼)
-data/
-dataset/
-dataset_final/
-test_results/
-outputs/
-
-# 모델 가중치 파일 (GitHub에 업로드 금지)
-*.pth
-*.onnx
-*.pt
-*.h5
-*.ckpt
-*.weights
-models/*.pth
-models/*.onnx
-!models/.gitkeep
-
-# Hugging Face 캐시
-.cache/
-**/.cache/
-
-# ⚠️ train.py는 제외하지 말 것 (학습 스크립트 필요)
-# *train.py  # <-- 이 라인 삭제됨
-
-# ==============================
-# Python Cache
-# ==============================
+# ── Python 캐시 ──────────────────────────────────────────
 __pycache__/
 **/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# ==============================
-# IDE / Editor
-# ==============================
+# ── 모델 가중치 (대용량 — Git LFS 또는 별도 공유) ────────
+*.pth
+*.pt
+*.onnx
+*.h5
+*.ckpt
+*.weights
+*.pdparams
+*.pdopt
+*.pdmodel
+*.pdiparams
+*.nb
+*.tar
+
+# ── 데이터셋 (대용량) ───────────────────────────────────
+data/
+dataset/
+dataset_final/
+
+# ── 학습 결과물 / 로그 ──────────────────────────────────
+test_results/
+**/test_results*/
+**/pork_test_results*/
+outputs/
+*.log
+logs/
+
+# ── OCR 학습 대용량 산출물 (스크립트는 추적) ────────────
+ai-server/OCR/pretrained/
+ai-server/OCR/rec_output/
+ai-server/OCR/rec_dataset/crop_images/
+ai-server/OCR/PaddleOCR/
+# 참고: OCR/*.py, rec_dataset/*.txt 등 스크립트/라벨은 추적됨
+
+# ── 사용하지 않는 실험 모델 폴더 ────────────────────────
+ai-server/convnext_l/
+ai-server/efficientnetv2_l/
+ai-server/swin_transformer/
+
+# ── Hugging Face 캐시 ───────────────────────────────────
+.cache/
+**/.cache/
+
+# ── IDE / 에디터 ─────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# ==============================
-# OS Generated
-# ==============================
+# ── OS 파일 ──────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ==============================
-# Environment Variables
-# ==============================
+# ── 환경변수 / 시크릿 ───────────────────────────────────
 .env
 .env.*
 *.env
 
-# ==============================
-# Temporary Files
-# ==============================
+# ── 임시 / 백업 ─────────────────────────────────────────
 *.tmp
 *.temp
 *.bak
 *.backup
-
-# ==============================
-# Logs
-# ==============================
-*.log
-logs/
-
-
-data_cleaning/
-models/
-
-**test_results_all/
-**test_results_v0/
-**test_results_v1/
-**test_results_v2/
-**test_results_v3/
-
-**pork_test_results_all/
-
-/models/
-**/convnext_l/
-**/efficientnetv2_l/
-**/swin_transformer/
+*_backup.*
+*_backup_*

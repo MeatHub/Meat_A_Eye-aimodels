@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>OCR bbox 수동 보정 도구</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; display: flex; height: 100vh; }
+
+/* 좌측 패널 */
+.sidebar {
+    width: 320px; background: #16213e; padding: 16px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 12px; border-right: 2px solid #0f3460;
+}
+.sidebar h2 { color: #e94560; font-size: 18px; }
+.sidebar .info { font-size: 12px; color: #999; }
+
+.file-list { flex: 1; overflow-y: auto; }
+.file-item {
+    padding: 8px 12px; cursor: pointer; border-radius: 6px;
+    font-size: 13px; display: flex; justify-content: space-between; align-items: center;
+}
+.file-item:hover { background: #0f3460; }
+.file-item.active { background: #e94560; color: white; }
+.file-item.modified { border-left: 3px solid #00d2ff; }
+.file-item .status { font-size: 10px; }
+.file-item .status.ok { color: #4caf50; }
+.file-item .status.fixed { color: #00d2ff; }
+
+.btn { 
+    padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer;
+    font-weight: bold; font-size: 14px; width: 100%;
+}
+.btn-primary { background: #e94560; color: white; }
+.btn-primary:hover { background: #c73852; }
+.btn-export { background: #0f3460; color: #00d2ff; border: 1px solid #00d2ff; }
+.btn-export:hover { background: #1a4a80; }
+
+/* 중앙 캔버스 */
+.canvas-area {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 20px; position: relative;
+}
+.canvas-header {
+    display: flex; gap: 16px; align-items: center; margin-bottom: 12px;
+    width: 100%; justify-content: center;
+}
+.canvas-header span { font-size: 14px; }
+.legend { display: flex; gap: 16px; font-size: 12px; }
+.legend .old { color: #ff6b6b; }
+.legend .new { color: #51cf66; }
+.legend .drawing { color: #ffd43b; }
+
+canvas {
+    border: 2px solid #0f3460; cursor: crosshair; max-width: 100%; max-height: 80vh;
+}
+.instructions {
+    margin-top: 12px; font-size: 12px; color: #888; text-align: center;
+}
+
+/* 우측 패널 */
+.detail-panel {
+    width: 300px; background: #16213e; padding: 16px; overflow-y: auto;
+    border-left: 2px solid #0f3460;
+}
+.detail-panel h3 { color: #00d2ff; margin-bottom: 12px; font-size: 15px; }
+.bbox-info {
+    background: #0f3460; border-radius: 8px; padding: 12px; margin-bottom: 12px;
+}
+.bbox-info label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
+.bbox-info .value { font-size: 14px; font-family: monospace; color: #51cf66; }
+.bbox-input {
+    width: 100%; background: #1a1a2e; border: 1px solid #333; color: #eee;
+    padding: 6px 8px; border-radius: 4px; font-family: monospace; font-size: 13px;
+    margin-bottom: 8px;
+}
+.coord-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.coord-item label { font-size: 10px; color: #888; }
+.coord-item input {
+    width: 100%; background: #1a1a2e; border: 1px solid #333; color: #00d2ff;
+    padding: 4px 6px; border-radius: 3px; font-family: monospace; font-size: 12px;
+}
+.nav-buttons { display: flex; gap: 8px; margin-top: 12px; }
+.nav-buttons button {
+    flex: 1; padding: 8px; border: 1px solid #333; background: #0f3460;
+    color: #eee; border-radius: 4px; cursor: pointer; font-size: 13px;
+}
+.nav-buttons button:hover { background: #1a4a80; }
+.btn-sm {
+    padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer;
+    font-size: 12px; margin-top: 8px;
+}
+.btn-reset { background: #e94560; color: white; }
+.btn-accept { background: #4caf50; color: white; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+    <h2>📁 OCR bbox 보정</h2>
+    <p class="info">폴더 선택 후 이미지별로 bbox를 확인/수정합니다.</p>
+    
+    <input type="file" id="folderInput" webkitdirectory multiple style="display:none">
+    <button class="btn btn-primary" onclick="document.getElementById('folderInput').click()">
+        📂 relabeled 폴더 선택
+    </button>
+    
+    <div>
+        <span class="info" id="statsText">파일을 선택하세요</span>
+    </div>
+    
+    <div class="file-list" id="fileList"></div>
+    
+    <button class="btn btn-export" id="exportBtn" onclick="exportAll()" style="display:none">
+        💾 수정된 JSON 전체 다운로드
+    </button>
+</div>
+
+<div class="canvas-area">
+    <div class="canvas-header">
+        <span id="currentFile">이미지를 선택하세요</span>
+        <div class="legend">
+            <span class="old">■ OLD (원본)</span>
+            <span class="new">■ NEW (현재)</span>
+            <span class="drawing">■ 드래그 중</span>
+        </div>
+    </div>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div class="instructions">
+        🖱️ 드래그로 새 bbox 그리기 | 📋 우측에서 좌표 직접 수정 | ← → 이전/다음
+    </div>
+</div>
+
+<div class="detail-panel">
+    <h3 id="detailTitle">상세 정보</h3>
+    
+    <div class="bbox-info">
+        <label>이력번호 (text)</label>
+        <div class="value" id="traceText">-</div>
+    </div>
+    
+    <div class="bbox-info">
+        <label>현재 bbox [x1, y1, x2, y2]</label>
+        <div class="coord-grid">
+            <div class="coord-item"><label>x1</label><input type="number" id="bx1" onchange="updateBboxFromInput()"></div>
+            <div class="coord-item"><label>y1</label><input type="number" id="by1" onchange="updateBboxFromInput()"></div>
+            <div class="coord-item"><label>x2</label><input type="number" id="bx2" onchange="updateBboxFromInput()"></div>
+            <div class="coord-item"><label>y2</label><input type="number" id="by2" onchange="updateBboxFromInput()"></div>
+        </div>
+    </div>
+
+    <button class="btn-sm btn-reset" onclick="resetBbox()">↩ 원본으로 되돌리기</button>
+    <button class="btn-sm btn-accept" onclick="acceptAndNext()" style="margin-left:8px">✓ 확인 & 다음</button>
+    
+    <div class="nav-buttons">
+        <button onclick="navigate(-1)">← 이전</button>
+        <button onclick="navigate(1)">다음 →</button>
+    </div>
+    
+    <div style="margin-top: 20px;">
+        <h3 style="color: #ffd43b; font-size: 13px;">키보드 단축키</h3>
+        <div class="info" style="margin-top: 8px; line-height: 1.8;">
+            <b>←</b> 이전 이미지<br>
+            <b>→</b> 다음 이미지<br>
+            <b>Enter</b> 확인 & 다음<br>
+            <b>R</b> 원본으로 되돌리기<br>
+            <b>S</b> JSON 다운로드<br>
+        </div>
+    </div>
+</div>
+
+<script>
+// ── State ──
+let files = {};        // { stem: { img: File, ann: File, origAnn: File } }
+let fileOrder = [];     // sorted stems
+let currentIdx = -1;
+let currentAnn = null;  // parsed JSON
+let originalAnns = {};  // { stem: original JSON string }
+let modifiedAnns = {};  // { stem: modified JSON object }
+let currentImg = null;  // Image element
+
+// Canvas drawing
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let drawing = false;
+let drawStart = { x: 0, y: 0 };
+let drawEnd = { x: 0, y: 0 };
+let scale = 1;
+let offsetX = 0, offsetY = 0;
+
+// ── Folder Loading ──
+document.getElementById('folderInput').addEventListener('change', (e) => {
+    files = {};
+    fileOrder = [];
+    const fileList = Array.from(e.target.files);
+    
+    for (const f of fileList) {
+        const path = f.webkitRelativePath;
+        // Match: {split}/images/{stem}.jpg or {split}/annotations/{stem}.json
+        const imgMatch = path.match(/([^/]+)\/images\/([^/]+)\.(jpg|jpeg|png)$/i);
+        const annMatch = path.match(/([^/]+)\/annotations\/([^/]+)\.json$/i);
+        
+        if (imgMatch) {
+            const key = `${imgMatch[1]}/${imgMatch[2]}`;
+            if (!files[key]) files[key] = {};
+            files[key].img = f;
+            files[key].split = imgMatch[1];
+            files[key].stem = imgMatch[2];
+        }
+        if (annMatch) {
+            const key = `${annMatch[1]}/${annMatch[2]}`;
+            if (!files[key]) files[key] = {};
+            files[key].ann = f;
+        }
+    }
+    
+    // Filter to only entries with both img and ann
+    fileOrder = Object.keys(files).filter(k => files[k].img && files[k].ann).sort();
+    
+    document.getElementById('statsText').textContent = `${fileOrder.length}개 이미지 로드됨`;
+    document.getElementById('exportBtn').style.display = fileOrder.length > 0 ? 'block' : 'none';
+    
+    renderFileList();
+    if (fileOrder.length > 0) loadFile(0);
+});
+
+function renderFileList() {
+    const list = document.getElementById('fileList');
+    list.innerHTML = '';
+    fileOrder.forEach((key, idx) => {
+        const div = document.createElement('div');
+        div.className = 'file-item' + (idx === currentIdx ? ' active' : '') + (modifiedAnns[key] ? ' modified' : '');
+        const stem = files[key].stem;
+        const split = files[key].split;
+        div.innerHTML = `
+            <span>${split}/${stem}</span>
+            <span class="status ${modifiedAnns[key] ? 'fixed' : 'ok'}">${modifiedAnns[key] ? '수정됨' : ''}</span>
+        `;
+        div.onclick = () => loadFile(idx);
+        list.appendChild(div);
+    });
+}
+
+async function loadFile(idx) {
+    if (idx < 0 || idx >= fileOrder.length) return;
+    currentIdx = idx;
+    const key = fileOrder[idx];
+    const entry = files[key];
+    
+    document.getElementById('currentFile').textContent = `${entry.split}/${entry.stem} (${idx + 1}/${fileOrder.length})`;
+    
+    // Load annotation
+    const annText = await entry.ann.text();
+    if (!originalAnns[key]) {
+        originalAnns[key] = annText;
+    }
+    currentAnn = modifiedAnns[key] || JSON.parse(annText);
+    
+    // Load image
+    const imgUrl = URL.createObjectURL(entry.img);
+    const img = new Image();
+    img.onload = () => {
+        currentImg = img;
+        fitCanvas(img);
+        draw();
+        updateDetailPanel();
+        renderFileList();
+    };
+    img.src = imgUrl;
+}
+
+function fitCanvas(img) {
+    const maxW = canvas.parentElement.clientWidth - 40;
+    const maxH = window.innerHeight * 0.75;
+    scale = Math.min(maxW / img.width, maxH / img.height, 1);
+    canvas.width = img.width * scale;
+    canvas.height = img.height * scale;
+    offsetX = 0;
+    offsetY = 0;
+}
+
+function draw() {
+    if (!currentImg || !currentAnn) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw image
+    ctx.drawImage(currentImg, 0, 0, canvas.width, canvas.height);
+    
+    // Draw OLD bbox (from original annotation) — red dashed
+    const key = fileOrder[currentIdx];
+    if (originalAnns[key]) {
+        const orig = JSON.parse(originalAnns[key]);
+        for (const obj of orig.objects) {
+            const [x1, y1, x2, y2] = obj.bbox.map(v => v * scale);
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = '#ff6b6b';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            ctx.setLineDash([]);
+            // Label
+            ctx.font = `${Math.max(11, 13 * scale)}px monospace`;
+            ctx.fillStyle = '#ff6b6b';
+            ctx.fillText(`OLD: ${obj.text.substring(0, 20)}`, x1, y1 - 5);
+        }
+    }
+    
+    // Draw NEW bbox (current) — green solid
+    for (const obj of currentAnn.objects) {
+        const [x1, y1, x2, y2] = obj.bbox.map(v => v * scale);
+        ctx.strokeStyle = '#51cf66';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.font = `${Math.max(11, 13 * scale)}px monospace`;
+        ctx.fillStyle = '#51cf66';
+        ctx.fillText(`NEW: ${obj.text.substring(0, 20)}`, x1, y2 + 15);
+    }
+    
+    // Draw in-progress rectangle
+    if (drawing) {
+        const x = Math.min(drawStart.x, drawEnd.x);
+        const y = Math.min(drawStart.y, drawEnd.y);
+        const w = Math.abs(drawEnd.x - drawStart.x);
+        const h = Math.abs(drawEnd.y - drawStart.y);
+        ctx.strokeStyle = '#ffd43b';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
+    }
+}
+
+function updateDetailPanel() {
+    if (!currentAnn || !currentAnn.objects || currentAnn.objects.length === 0) {
+        document.getElementById('traceText').textContent = '-';
+        return;
+    }
+    const obj = currentAnn.objects[0];
+    document.getElementById('traceText').textContent = obj.text;
+    document.getElementById('bx1').value = obj.bbox[0];
+    document.getElementById('by1').value = obj.bbox[1];
+    document.getElementById('bx2').value = obj.bbox[2];
+    document.getElementById('by2').value = obj.bbox[3];
+}
+
+function updateBboxFromInput() {
+    if (!currentAnn || !currentAnn.objects[0]) return;
+    const key = fileOrder[currentIdx];
+    currentAnn.objects[0].bbox = [
+        parseInt(document.getElementById('bx1').value) || 0,
+        parseInt(document.getElementById('by1').value) || 0,
+        parseInt(document.getElementById('bx2').value) || 0,
+        parseInt(document.getElementById('by2').value) || 0,
+    ];
+    modifiedAnns[key] = JSON.parse(JSON.stringify(currentAnn));
+    draw();
+    renderFileList();
+}
+
+// ── Canvas Mouse Events ──
+canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    drawStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    drawEnd = { ...drawStart };
+    drawing = true;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!drawing) return;
+    const rect = canvas.getBoundingClientRect();
+    drawEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    draw();
+});
+
+canvas.addEventListener('mouseup', (e) => {
+    if (!drawing) return;
+    drawing = false;
+    const rect = canvas.getBoundingClientRect();
+    drawEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    
+    // Convert to image coordinates
+    const x1 = Math.round(Math.min(drawStart.x, drawEnd.x) / scale);
+    const y1 = Math.round(Math.min(drawStart.y, drawEnd.y) / scale);
+    const x2 = Math.round(Math.max(drawStart.x, drawEnd.x) / scale);
+    const y2 = Math.round(Math.max(drawStart.y, drawEnd.y) / scale);
+    
+    // Minimum size check
+    if (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 5) return;
+    
+    // Update bbox
+    if (currentAnn && currentAnn.objects && currentAnn.objects[0]) {
+        const key = fileOrder[currentIdx];
+        currentAnn.objects[0].bbox = [x1, y1, x2, y2];
+        modifiedAnns[key] = JSON.parse(JSON.stringify(currentAnn));
+        updateDetailPanel();
+        draw();
+        renderFileList();
+    }
+});
+
+// ── Actions ──
+function resetBbox() {
+    const key = fileOrder[currentIdx];
+    if (originalAnns[key]) {
+        currentAnn = JSON.parse(originalAnns[key]);
+        delete modifiedAnns[key];
+        updateDetailPanel();
+        draw();
+        renderFileList();
+    }
+}
+
+function navigate(dir) {
+    const newIdx = currentIdx + dir;
+    if (newIdx >= 0 && newIdx < fileOrder.length) {
+        loadFile(newIdx);
+    }
+}
+
+function acceptAndNext() {
+    const key = fileOrder[currentIdx];
+    if (!modifiedAnns[key]) {
+        modifiedAnns[key] = JSON.parse(JSON.stringify(currentAnn));
+    }
+    navigate(1);
+}
+
+function exportAll() {
+    const modifiedKeys = Object.keys(modifiedAnns);
+    if (modifiedKeys.length === 0) {
+        alert('수정된 파일이 없습니다.');
+        return;
+    }
+    
+    // ZIP 파일로 묶어서 한 번에 다운로드
+    const zip = new JSZip();
+    const splits = new Set();
+    
+    for (const key of modifiedKeys) {
+        const ann = modifiedAnns[key];
+        const parts = key.split('/');
+        const split = parts[0];
+        const stem = parts[parts.length - 1];
+        splits.add(split);
+        zip.file(`${split}/annotations/${stem}.json`, JSON.stringify(ann, null, 4));
+    }
+    
+    zip.generateAsync({ type: 'blob' }).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const splitNames = Array.from(splits).join('_');
+        a.download = `bbox_modified_${splitNames}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        alert(`${modifiedKeys.length}개 JSON이 ZIP으로 다운로드됨.\n\nZIP 압축 해제 후 {split}/annotations/ 폴더를\nrelabeled/{split}/annotations/ 에 덮어씌우세요.`);
+    });
+}
+
+// ── Keyboard ──
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    switch(e.key) {
+        case 'ArrowLeft': navigate(-1); break;
+        case 'ArrowRight': navigate(1); break;
+        case 'Enter': acceptAndNext(); break;
+        case 'r': case 'R': resetBbox(); break;
+        case 's': case 'S': exportAll(); break;
+    }
+});
+</script>
+
+</body>
+</html>
